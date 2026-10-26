@@ -9,23 +9,25 @@ Built with [Arc Studio](https://studio.arc.io)
 **Run with Docker (recommended):**
 
 ```bash
-git clone https://github.com/flaviarv/sancoes-csnu-arc.git
-cd sancoes-csnu-arc
+git clone https://github.com/flaviarv/sancoes-csnu-arc-testnet.git
+cd sancoes-csnu-arc-testnet
 docker build -t csnu-checker .
 docker run -p 7860:7860 csnu-checker
 ```
 
 Open http://localhost:7860
 
+> On Windows, make sure Docker Desktop is running before executing these commands.
+
 **Run without Docker:**
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/flaviarv/sancoes-csnu-arc.git
-cd sancoes-csnu-arc
+git clone https://github.com/flaviarv/sancoes-csnu-arc-testnet.git
+cd sancoes-csnu-arc-testnet
 
 # 2. Install Python dependencies
-pip install fastapi uvicorn pandas pyarrow
+pip install fastapi uvicorn pandas pyarrow aiofiles
 
 # 3. Start the backend (port 3001)
 python3 -m uvicorn main:app --host 127.0.0.1 --port 3001 &
