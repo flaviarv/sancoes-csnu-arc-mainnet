@@ -1,7 +1,6 @@
 """
 main_docker.py — versão Docker da API.
-Igual ao main.py, mas serve os arquivos estáticos do Vite
-na raiz em vez do HTML simples do Swagger.
+Serve a API CSNU, validação ERC-8183 complete-job e arquivos estáticos do Vite.
 """
 import os
 import unicodedata
@@ -11,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import pandas as pd
+from web3 import Web3
 
 app = FastAPI(title="Verificador de Sanções CSNU")
 
@@ -67,7 +67,7 @@ def startup_event():
     load_csnu_dataset("csnu_list.parquet")
 
 
-# ── API ──────────────────────────────────────────────────
+# ── Modelos ──────────────────────────────────────────────
 
 class CheckNamesRequest(BaseModel):
     raw_input: str
@@ -80,8 +80,81 @@ class NameResult(BaseModel):
 class CheckNamesResponse(BaseModel):
     results: List[NameResult]
 
+class CompleteJobRequest(BaseModel):
+    job_id: int
+
+
+# ── ERC-8183 Complete Job ────────────────────────────────
+
+COMPLETE_JOB_ABI = [
+    {"name": "submit",   "type": "function", "stateMutability": "nonpayable",
+     "inputs": [{"name": "jobId", "type": "uint256"}, {"name": "deliverable", "type": "bytes32"}, {"name": "optParams", "type": "bytes"}], "outputs": []},
+    {"name": "complete", "type": "function", "stateMutability": "nonpayable",
+     "inputs": [{"name": "jobId", "type": "uint256"}, {"name": "reason", "type": "bytes32"}, {"name": "optParams", "type": "bytes"}], "outputs": []},
+    {"name": "getJob",   "type": "function", "stateMutability": "view",
+     "inputs": [{"name": "jobId", "type": "uint256"}],
+     "outputs": [{"name": "", "type": "tuple", "components": [
+         {"name": "id", "type": "uint256"}, {"name": "client", "type": "address"},
+         {"name": "provider", "type": "address"}, {"name": "evaluator", "type": "address"},
+         {"name": "description", "type": "string"}, {"name": "budget", "type": "uint256"},
+         {"name": "expiredAt", "type": "uint256"}, {"name": "status", "type": "uint8"},
+         {"name": "hook", "type": "address"}]}]},
+]
+
+ARC_RPC       = "https://rpc.mainnet.arc.io"
+CONTRACT_ADDR = Web3.to_checksum_address("0x975a005E4107c12e585DB71059fe857449510c99")
+TREASURY_ADDR = Web3.to_checksum_address("0xd2f80f6cf27483392f70f21b3381109f9c33c390")
+
+
+@app.post("/complete-job")
+@app.post("/api/complete-job")
+def complete_job(payload: CompleteJobRequest):
+    pk = os.environ.get("TREASURY_PRIVATE_KEY", "")
+    if not pk:
+        raise HTTPException(status_code=503, detail="TREASURY_PRIVATE_KEY not configured — auto-complete unavailable.")
+    if not pk.startswith("0x"):
+        pk = "0x" + pk
+
+    w3 = Web3(Web3.HTTPProvider(ARC_RPC))
+    contract = w3.eth.contract(address=CONTRACT_ADDR, abi=COMPLETE_JOB_ABI)
+    job = contract.functions.getJob(payload.job_id).call()
+    status = job[7]
+
+    if status == 3:
+        return {"status": "already_completed"}
+
+    if status == 1:
+        tx_submit = contract.functions.submit(
+            payload.job_id, b'\x00' * 32, b''
+        ).build_transaction({
+            "from": TREASURY_ADDR,
+            "nonce": w3.eth.get_transaction_count(TREASURY_ADDR),
+            "gas": 200_000,
+        })
+        signed = w3.eth.account.sign_transaction(tx_submit, pk)
+        submit_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        w3.eth.wait_for_transaction_receipt(submit_hash, timeout=60)
+        status = 2
+
+    if status == 2:
+        tx_complete = contract.functions.complete(
+            payload.job_id, b'\x00' * 32, b''
+        ).build_transaction({
+            "from": TREASURY_ADDR,
+            "nonce": w3.eth.get_transaction_count(TREASURY_ADDR),
+            "gas": 200_000,
+        })
+        signed = w3.eth.account.sign_transaction(tx_complete, pk)
+        complete_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        return {"status": "completed", "tx_hash": complete_hash.hex()}
+
+    return {"status": "not_ready", "job_status": status}
+
+
+# ── Consulta de Nomes ─────────────────────────────────────
 
 @app.post("/check-names", response_model=CheckNamesResponse)
+@app.post("/api/check-names", response_model=CheckNamesResponse)
 def check_names(payload: CheckNamesRequest):
     if not payload.raw_input.strip():
         raise HTTPException(status_code=400, detail="Nenhum nome fornecido.")
@@ -109,12 +182,10 @@ def check_names(payload: CheckNamesRequest):
 STATIC_DIR = "static"
 
 if os.path.isdir(STATIC_DIR):
-    # Serve arquivos JS/CSS/assets
     app.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
 
     @app.get("/", include_in_schema=False)
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str = ""):
-        # Rotas da API já foram tratadas acima — aqui só chega o frontend
         index = os.path.join(STATIC_DIR, "index.html")
         return FileResponse(index)
