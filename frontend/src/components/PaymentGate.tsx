@@ -7,10 +7,10 @@ import { Wallet, Coins, Loader2, CheckCircle2, ExternalLink, AlertCircle } from 
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
 
-// Arc Testnet constants
+// Arc Mainnet constants
 const USDC_ADDRESS = '0x3600000000000000000000000000000000000000' as Address
-const AGENTIC_COMMERCE = '0x0747EEf0706327138c69792bF28Cd525089e4583' as Address
-const SEARCH_PRICE = parseUnits('0.1', 6) // 0.1 USDC per search
+const AGENTIC_COMMERCE = '0x975a005E4107c12e585DB71059fe857449510c99' as Address
+const SEARCH_PRICE = parseUnits('1', 6) // 1 USDC per search
 
 const acAbi = [
   {

@@ -2,3 +2,12 @@
 __pycache__/
 *.pyc
 .vscode/
+
+# Secrets — never commit these
+.env
+.env.*
+*.env
+.circle/
+recovery_file*.dat
+*private_key*
+*secret*
