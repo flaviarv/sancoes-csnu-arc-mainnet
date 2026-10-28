@@ -82,7 +82,6 @@ class CheckNamesResponse(BaseModel):
 
 
 @app.post("/check-names", response_model=CheckNamesResponse)
-@app.post("/api/check-names", response_model=CheckNamesResponse)
 def check_names(payload: CheckNamesRequest):
     if not payload.raw_input.strip():
         raise HTTPException(status_code=400, detail="Nenhum nome fornecido.")
@@ -116,7 +115,6 @@ if os.path.isdir(STATIC_DIR):
     @app.get("/", include_in_schema=False)
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str = ""):
-        # Rotas da API já foram registradas antes do mount — aqui só chega o frontend
-        # Nunca serve index.html para chamadas /api/* (o FastAPI resolve antes)
+        # Rotas da API já foram tratadas acima — aqui só chega o frontend
         index = os.path.join(STATIC_DIR, "index.html")
         return FileResponse(index)

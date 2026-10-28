@@ -1,0 +1,17 @@
+services:
+  csnu:
+    build: .
+    image: csnu-checker
+    restart: unless-stopped
+    ports:
+      - "80:7860"
+    environment:
+      - TREASURY_PRIVATE_KEY=${TREASURY_PRIVATE_KEY}
+      - CIRCLE_API_KEY=${CIRCLE_API_KEY}
+      - CIRCLE_ENTITY_SECRET=${CIRCLE_ENTITY_SECRET}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

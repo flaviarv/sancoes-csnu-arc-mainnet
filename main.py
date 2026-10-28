@@ -1,8 +1,10 @@
+import os
 import unicodedata
 from typing import List, Set
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pandas as pd
+from web3 import Web3
 
 app = FastAPI(title="Verificador de Sanções CSNU")
 
@@ -84,6 +86,83 @@ class NameResult(BaseModel):
 
 class CheckNamesResponse(BaseModel):
     results: List[NameResult]
+
+
+# ======================================================
+#               COMPLETE JOB (ERC-8183)
+# ======================================================
+
+COMPLETE_JOB_ABI = [
+    {"name": "submit",   "type": "function", "stateMutability": "nonpayable",
+     "inputs": [{"name": "jobId", "type": "uint256"}, {"name": "deliverable", "type": "bytes32"}, {"name": "optParams", "type": "bytes"}], "outputs": []},
+    {"name": "complete", "type": "function", "stateMutability": "nonpayable",
+     "inputs": [{"name": "jobId", "type": "uint256"}, {"name": "reason", "type": "bytes32"}, {"name": "optParams", "type": "bytes"}], "outputs": []},
+    {"name": "getJob",   "type": "function", "stateMutability": "view",
+     "inputs": [{"name": "jobId", "type": "uint256"}],
+     "outputs": [{"name": "", "type": "tuple", "components": [
+         {"name": "id", "type": "uint256"}, {"name": "client", "type": "address"},
+         {"name": "provider", "type": "address"}, {"name": "evaluator", "type": "address"},
+         {"name": "description", "type": "string"}, {"name": "budget", "type": "uint256"},
+         {"name": "expiredAt", "type": "uint256"}, {"name": "status", "type": "uint8"},
+         {"name": "hook", "type": "address"}]}]},
+]
+
+ARC_RPC       = "https://rpc.mainnet.arc.io"
+CONTRACT_ADDR = Web3.to_checksum_address("0x975a005E4107c12e585DB71059fe857449510c99")
+TREASURY_ADDR = Web3.to_checksum_address("0xd2f80f6cf27483392f70f21b3381109f9c33c390")
+
+class CompleteJobRequest(BaseModel):
+    job_id: int
+
+@app.post("/complete-job")
+def complete_job(payload: CompleteJobRequest):
+    """
+    Called by the frontend after a successful search.
+    Signs and broadcasts complete() as the treasury/evaluator via a raw private key.
+    Requires TREASURY_PRIVATE_KEY env var.
+    """
+    pk = os.environ.get("TREASURY_PRIVATE_KEY", "")
+    if not pk:
+        raise HTTPException(status_code=503, detail="TREASURY_PRIVATE_KEY not configured — auto-complete unavailable.")
+    if not pk.startswith("0x"):
+        pk = "0x" + pk
+
+    w3 = Web3(Web3.HTTPProvider(ARC_RPC))
+    contract = w3.eth.contract(address=CONTRACT_ADDR, abi=COMPLETE_JOB_ABI)
+    job = contract.functions.getJob(payload.job_id).call()
+    status = job[7]  # uint8 status: 0=Open,1=Funded,2=Submitted,3=Completed,4=Rejected,5=Expired
+
+    if status == 3:
+        return {"status": "already_completed"}
+
+    # Status 1 = Funded: treasury is the provider — call submit() first, then complete()
+    if status == 1:
+        tx_submit = contract.functions.submit(
+            payload.job_id, b'\x00' * 32, b''
+        ).build_transaction({
+            "from": TREASURY_ADDR,
+            "nonce": w3.eth.get_transaction_count(TREASURY_ADDR),
+            "gas": 200_000,
+        })
+        signed = w3.eth.account.sign_transaction(tx_submit, pk)
+        submit_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        # wait for submit receipt before complete
+        w3.eth.wait_for_transaction_receipt(submit_hash, timeout=60)
+        status = 2  # now Submitted
+
+    if status == 2:
+        tx_complete = contract.functions.complete(
+            payload.job_id, b'\x00' * 32, b''
+        ).build_transaction({
+            "from": TREASURY_ADDR,
+            "nonce": w3.eth.get_transaction_count(TREASURY_ADDR),
+            "gas": 200_000,
+        })
+        signed = w3.eth.account.sign_transaction(tx_complete, pk)
+        complete_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        return {"status": "completed", "tx_hash": complete_hash.hex()}
+
+    return {"status": "not_ready", "job_status": status}
 
 
 @app.post("/check-names", response_model=CheckNamesResponse)

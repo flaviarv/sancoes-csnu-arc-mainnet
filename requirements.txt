@@ -3,3 +3,4 @@ uvicorn==0.54.0
 pandas==3.1.0
 pyarrow==26.0.0
 aiofiles==25.1.0
+web3==7.12.0
