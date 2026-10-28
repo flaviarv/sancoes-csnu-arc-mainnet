@@ -2,15 +2,19 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, useSwitchChain, useChainId } from 'wagmi'
 import { parseUnits, erc20Abi, parseEventLogs, type Address } from 'viem'
-import { arcTestnet } from 'viem/chains'
+import { arc } from 'viem/chains'
 import { Wallet, Coins, Loader2, CheckCircle2, ExternalLink, AlertCircle } from 'lucide-react'
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
 
 // Arc Mainnet constants
 const USDC_ADDRESS = '0x3600000000000000000000000000000000000000' as Address
+// Arc Mainnet — deployado em 2026-10-26
 const AGENTIC_COMMERCE = '0x975a005E4107c12e585DB71059fe857449510c99' as Address
 const SEARCH_PRICE = parseUnits('1', 6) // 1 USDC per search
+// Treasury / evaluator: receives 1% fee and evaluates every job
+// Must differ from the client (EvaluatorMustDifferFromClient guard in contract)
+const TREASURY = '0xd2f80f6cf27483392f70f21b3381109f9c33c390' as Address
 
 const acAbi = [
   {
@@ -33,6 +37,11 @@ const acAbi = [
     outputs: [],
   },
   {
+    type: 'function', name: 'submit', stateMutability: 'nonpayable',
+    inputs: [{ name: 'jobId', type: 'uint256' }, { name: 'deliverable', type: 'bytes32' }, { name: 'optParams', type: 'bytes' }],
+    outputs: [],
+  },
+  {
     type: 'event', name: 'JobCreated',
     inputs: [
       { name: 'jobId', type: 'uint256', indexed: true }, { name: 'client', type: 'address', indexed: true },
@@ -42,7 +51,7 @@ const acAbi = [
   },
 ] as const
 
-type Step = 'idle' | 'approving' | 'creating' | 'funding' | 'done' | 'error'
+type Step = 'idle' | 'creating' | 'approving' | 'funding' | 'submitting' | 'done' | 'error'
 
 interface Props {
   onPaid: () => void
@@ -52,7 +61,7 @@ export default function PaymentGate({ onPaid }: Props) {
   const { address, isConnected } = useAccount()
   const chainId = useChainId()
   const { switchChainAsync } = useSwitchChain()
-  const isWrongChain = isConnected && chainId !== arcTestnet.id
+  const isWrongChain = isConnected && chainId !== arc.id
   const [step, setStep] = useState<Step>('idle')
   const [jobId, setJobId] = useState<bigint | null>(null)
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>()
@@ -78,7 +87,7 @@ export default function PaymentGate({ onPaid }: Props) {
 
   const calledRef = useRef(false)
   useEffect(() => {
-    if (receipt && step === 'funding' && !calledRef.current) {
+    if (receipt && step === 'submitting' && !calledRef.current) {
       calledRef.current = true
       // use a microtask to move setState out of the synchronous effect body
       void Promise.resolve().then(() => {
@@ -93,26 +102,16 @@ export default function PaymentGate({ onPaid }: Props) {
     if (!address) return
     setErrMsg(null)
     try {
-      // Ensure we are on Arc Testnet before any contract call
-      if (chainId !== arcTestnet.id) {
-        await switchChainAsync({ chainId: arcTestnet.id })
+      // Ensure we are on Arc Mainnet before any contract call
+      if (chainId !== arc.id) {
+        await switchChainAsync({ chainId: arc.id })
       }
 
-      // Build a publicClient using the RPC proxy when available, else Arc default
+      // Build a publicClient pointing at Arc Mainnet RPC
       const { createPublicClient, http } = await import('viem')
-      const proxyChainsRaw: string = typeof import.meta.env.VITE_RPC_PROXY_CHAINS === 'string'
-        ? import.meta.env.VITE_RPC_PROXY_CHAINS : ''
-      const proxyBase: string = typeof import.meta.env.VITE_RPC_PROXY_BASE_URL === 'string'
-        ? import.meta.env.VITE_RPC_PROXY_BASE_URL : ''
-      const proxyToken: string = typeof import.meta.env.VITE_RPC_PROXY_TOKEN === 'string'
-        ? import.meta.env.VITE_RPC_PROXY_TOKEN : ''
-      const proxyChains: string[] = proxyChainsRaw.split(',')
-      const rpcUrl: string = proxyBase && proxyChains.includes('Arc_Testnet')
-        ? `${proxyBase}/api/rpc/Arc_Testnet?_rpc_token=${proxyToken}`
-        : arcTestnet.rpcUrls.default.http[0]
       const publicClient = createPublicClient({
-        chain: arcTestnet,
-        transport: http(rpcUrl),
+        chain: arc,
+        transport: http('https://rpc.mainnet.arc.io'),
       })
 
       // helper: wait for a tx and require at least 1 confirmation
@@ -120,21 +119,27 @@ export default function PaymentGate({ onPaid }: Props) {
         return publicClient.waitForTransactionReceipt({ hash, confirmations: 1, timeout: 120_000 })
       }
 
-      // Step 1: create job — provider = self, evaluator = self for testnet demo
+      // Step 1: create job
+      // provider = user (receives 0.99 USDC back after completion)
+      // evaluator must differ from client — if user IS treasury, use contract address as evaluator
       setStep('creating')
       const expiredAt = BigInt(Math.floor(Date.now() / 1000) + 3600)
+      // evaluator must differ from client — if user IS treasury, use contract address as evaluator
+      const evaluator: Address = address.toLowerCase() === TREASURY.toLowerCase()
+        ? AGENTIC_COMMERCE
+        : TREASURY
       const createHash = await writeContractAsync({
         address: AGENTIC_COMMERCE,
         abi: acAbi,
         functionName: 'createJob',
         args: [
-          address,
-          address,
+          TREASURY,     // provider = treasury (receives 0.99 USDC — the service fee)
+          evaluator,    // evaluator ≠ client
           expiredAt,
           'CSNU sanctions check — 1 search',
           '0x0000000000000000000000000000000000000000',
         ],
-        chainId: arcTestnet.id,
+        chainId: arc.id,
       })
       const createReceipt = await waitTx(createHash)
       const [jobCreated] = parseEventLogs({ abi: acAbi, eventName: 'JobCreated', logs: createReceipt.logs })
@@ -147,7 +152,7 @@ export default function PaymentGate({ onPaid }: Props) {
         abi: acAbi,
         functionName: 'setBudget',
         args: [newJobId, SEARCH_PRICE, '0x'],
-        chainId: arcTestnet.id,
+        chainId: arc.id,
       })
       await waitTx(budgetHash)
 
@@ -158,7 +163,7 @@ export default function PaymentGate({ onPaid }: Props) {
         abi: erc20Abi,
         functionName: 'approve',
         args: [AGENTIC_COMMERCE, SEARCH_PRICE],
-        chainId: arcTestnet.id,
+        chainId: arc.id,
       })
       await waitTx(approveHash)
 
@@ -169,8 +174,18 @@ export default function PaymentGate({ onPaid }: Props) {
         abi: acAbi,
         functionName: 'fund',
         args: [newJobId, '0x'],
-        chainId: arcTestnet.id,
+        chainId: arc.id,
       })
+      await waitTx(fundHash)
+
+      // Step 5: backend calls submit() + complete() as treasury (provider + evaluator)
+      setStep('submitting')
+      await fetch('/api/complete-job', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: Number(newJobId) }),
+      })
+
       setTxHash(fundHash)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Transaction failed'
@@ -181,15 +196,16 @@ export default function PaymentGate({ onPaid }: Props) {
   }
 
   const stepLabels: Record<Step, string> = {
-    idle: 'Pay 0.1 USDC to search',
-    approving: 'Approving USDC spend…',
+    idle: 'Pay 1 USDC to search',
     creating: 'Creating escrow job…',
+    approving: 'Approving USDC spend…',
     funding: 'Funding escrow…',
+    submitting: 'Finalizing payment…',
     done: 'Paid — search unlocked',
     error: 'Retry payment',
   }
 
-  const isProcessing = ['approving', 'creating', 'funding'].includes(step)
+  const isProcessing = ['creating', 'approving', 'funding', 'submitting'].includes(step)
 
   if (!isConnected) {
     return (
@@ -227,7 +243,7 @@ export default function PaymentGate({ onPaid }: Props) {
           </div>
           <div>
             <p className="text-sm font-semibold text-slate-800">Pay per search</p>
-            <p className="text-xs text-slate-500">ERC-8183 escrow on Arc Testnet</p>
+            <p className="text-xs text-slate-500">ERC-8183 escrow on Arc Mainnet</p>
           </div>
         </div>
         <div className="text-right">
@@ -240,14 +256,14 @@ export default function PaymentGate({ onPaid }: Props) {
       {isWrongChain && (
         <div className="flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs text-amber-700">
           <AlertCircle size={13} className="mt-0.5 shrink-0 text-amber-500" />
-          <span>Wrong network detected. Clicking Pay will switch to <strong>Arc Testnet</strong> automatically.</span>
+          <span>Wrong network detected. Clicking Pay will switch to <strong>Arc Mainnet</strong> automatically.</span>
         </div>
       )}
 
       {/* Price row */}
       <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-100">
         <span className="text-xs text-slate-500">Price per search</span>
-        <span className="text-sm font-bold text-slate-800 tabular-nums">0.10 USDC</span>
+        <span className="text-sm font-bold text-slate-800 tabular-nums">1.00 USDC</span>
       </div>
 
       {/* Timeout comparison */}
@@ -279,22 +295,26 @@ export default function PaymentGate({ onPaid }: Props) {
             className="overflow-hidden"
           >
             <div className="space-y-1.5">
-              {(['creating', 'approving', 'funding'] as const).map((s) => (
-                <div key={s} className="flex items-center gap-2.5 text-xs">
-                  {step === s ? (
-                    <Loader2 size={12} className="animate-spin text-blue-500 shrink-0" />
-                  ) : ['approving', 'funding'].indexOf(s) < ['approving', 'funding'].indexOf(step as 'approving' | 'funding') ||
-                    (step === 'approving' && s === 'creating') ||
-                    (step === 'funding' && (s === 'creating' || s === 'approving')) ? (
-                    <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />
-                  ) : (
-                    <div className="w-3 h-3 rounded-full border border-slate-200 shrink-0" />
-                  )}
-                  <span className={step === s ? 'text-slate-700 font-medium' : 'text-slate-400'}>
-                    {s === 'creating' ? 'Create escrow job' : s === 'approving' ? 'Approve USDC' : 'Fund escrow'}
-                  </span>
-                </div>
-              ))}
+              {(['creating', 'approving', 'funding', 'submitting'] as const).map((s) => {
+                const order = ['creating', 'approving', 'funding', 'submitting']
+                const isDone = order.indexOf(s) < order.indexOf(step)
+                const isCurrent = step === s
+                const labels = { creating: 'Create escrow job', approving: 'Approve USDC', funding: 'Fund escrow', submitting: 'Finalize payment' }
+                return (
+                  <div key={s} className="flex items-center gap-2.5 text-xs">
+                    {isCurrent ? (
+                      <Loader2 size={12} className="animate-spin text-blue-500 shrink-0" />
+                    ) : isDone ? (
+                      <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />
+                    ) : (
+                      <div className="w-3 h-3 rounded-full border border-slate-200 shrink-0" />
+                    )}
+                    <span className={isCurrent ? 'text-slate-700 font-medium' : 'text-slate-400'}>
+                      {labels[s]}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           </motion.div>
         )}
@@ -307,7 +327,7 @@ export default function PaymentGate({ onPaid }: Props) {
           <span className="font-medium">Search unlocked</span>
           {jobId !== null && (
             <a
-              href={`https://explorer.testnet.arc.io/search?q=${jobId.toString()}`}
+              href={`https://explorer.arc.io/search?q=${jobId.toString()}`}
               target="_blank"
               rel="noopener noreferrer"
               className="ml-auto text-emerald-600 hover:text-emerald-800"
