@@ -55,9 +55,10 @@ type Step = 'idle' | 'creating' | 'approving' | 'funding' | 'submitting' | 'done
 
 interface Props {
   onPaid: () => void
+  serviceLabel?: string
 }
 
-export default function PaymentGate({ onPaid }: Props) {
+export default function PaymentGate({ onPaid, serviceLabel = 'search' }: Props) {
   const { address, isConnected } = useAccount()
   const chainId = useChainId()
   const { switchChainAsync } = useSwitchChain()
@@ -120,23 +121,28 @@ export default function PaymentGate({ onPaid }: Props) {
       }
 
       // Step 1: create job
-      // provider = user (receives 0.99 USDC back after completion)
-      // evaluator must differ from client — if user IS treasury, use contract address as evaluator
+      // provider = TREASURY (receives 0.99 USDC — the service fee)
+      // evaluator = TREASURY when user != TREASURY; otherwise use deploy wallet as evaluator
+      // Rule: evaluator != client (msg.sender) AND evaluator != address(0)
       setStep('creating')
       const expiredAt = BigInt(Math.floor(Date.now() / 1000) + 3600)
-      // evaluator must differ from client — if user IS treasury, use contract address as evaluator
+      // Rule: evaluator != client (msg.sender). No restriction on provider == evaluator.
+      // provider = TREASURY → receives 0.99 USDC (service revenue)
+      // evaluator = TREASURY → calls complete() via backend (TREASURY_PRIVATE_KEY)
+      // Exception: if user IS treasury (client == TREASURY), evaluator must differ → use deploy wallet
+      const ALTERNATE_EVALUATOR = '0xf10dec0ff0e1c04fdcfef1c1b603ce3a8d6f0e94' as Address
       const evaluator: Address = address.toLowerCase() === TREASURY.toLowerCase()
-        ? AGENTIC_COMMERCE
+        ? ALTERNATE_EVALUATOR
         : TREASURY
       const createHash = await writeContractAsync({
         address: AGENTIC_COMMERCE,
         abi: acAbi,
         functionName: 'createJob',
         args: [
-          TREASURY,     // provider = treasury (receives 0.99 USDC — the service fee)
-          evaluator,    // evaluator ≠ client
+          TREASURY,     // provider = TREASURY (receives 0.99 USDC — service revenue)
+          evaluator,    // evaluator = TREASURY (or alternate if user IS treasury)
           expiredAt,
-          'CSNU sanctions check — 1 search',
+          'Sanctions Intelligence — 1 search',
           '0x0000000000000000000000000000000000000000',
         ],
         chainId: arc.id,
@@ -196,7 +202,7 @@ export default function PaymentGate({ onPaid }: Props) {
   }
 
   const stepLabels: Record<Step, string> = {
-    idle: 'Pay 1 USDC to search',
+    idle: `Pay 1 USDC to ${serviceLabel}`,
     creating: 'Creating escrow job…',
     approving: 'Approving USDC spend…',
     funding: 'Funding escrow…',
