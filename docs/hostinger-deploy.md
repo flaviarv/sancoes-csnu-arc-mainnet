@@ -1,87 +1,210 @@
-# Deploy na Hostinger VPS
+# Deploy na Hostinger VPS — Guia Completo
 
 ## Pré-requisitos
 
-- Plano **KVM 1** ou superior na Hostinger (~$5/mês)
-- Sistema operacional: **Ubuntu 22.04** (escolha na criação do VPS)
+- VPS Hostinger com Ubuntu 24.04
+- Docker Desktop rodando (para testes locais)
 - Acesso SSH ao servidor
+- As 3 chaves do `.env` em mãos:
+  - `TREASURY_PRIVATE_KEY` (chave privada da carteira MetaMask, sem `0x`)
+  - `CIRCLE_API_KEY` (Live API Key do console.circle.com)
+  - `CIRCLE_ENTITY_SECRET` (gerado no Arc Studio)
 
 ---
 
-## Passo 1 — Instalar Docker no VPS
+## PASSO 1 — Conectar ao servidor via SSH
 
-Conecte via SSH e execute:
+No terminal do VS Code (ou qualquer terminal):
+
+```bash
+ssh root@SEU_IP_DO_VPS
+```
+
+Substitua `SEU_IP_DO_VPS` pelo IP que aparece no painel Hostinger em **VPS → Gerenciar → Visão geral**.
+
+Digite a senha quando solicitado (os caracteres não aparecem — é normal).
+
+---
+
+## PASSO 2 — Instalar Docker no servidor
+
+Execute um comando de cada vez:
 
 ```bash
 curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-newgrp docker
+```
+
+```bash
+systemctl enable docker
+```
+
+```bash
+systemctl start docker
+```
+
+Verifique se instalou corretamente:
+
+```bash
 docker --version
 ```
 
+Deve aparecer algo como `Docker version 27.x.x`.
+
 ---
 
-## Passo 2 — Clonar o repositório
+## PASSO 3 — Clonar o repositório em pasta separada (sem afetar o site atual)
 
 ```bash
-git clone https://github.com/flaviarv/sancoes-csnu-arc-mainnet
-cd sancoes-csnu-arc-mainnet
+cd ~
+```
+
+```bash
+git clone https://github.com/flaviarv/sancoes-csnu-arc-mainnet csnu-novo
+```
+
+```bash
+cd csnu-novo
 ```
 
 ---
 
-## Passo 3 — Configurar variáveis de ambiente
-
-Crie o arquivo `.env` no servidor (NUNCA faça commit deste arquivo):
+## PASSO 4 — Criar o arquivo `.env` com as chaves
 
 ```bash
 nano .env
 ```
 
-Adicione as seguintes variáveis:
+Cole exatamente o texto abaixo, substituindo os valores reais:
 
 ```
-TREASURY_PRIVATE_KEY=sua_chave_privada_sem_0x
-CIRCLE_API_KEY=sua_circle_api_key
-CIRCLE_ENTITY_SECRET=seu_entity_secret
+TREASURY_PRIVATE_KEY=suachaveprivadaaqui
+CIRCLE_API_KEY=suaapikeyaqui
+CIRCLE_ENTITY_SECRET=seuEntitySecretaqui
 ```
 
-Salve com `Ctrl+O`, depois `Ctrl+X`.
+**Importante:**
+- `TREASURY_PRIVATE_KEY` é a chave privada exportada do MetaMask — **sem o prefixo `0x`**
+- Não use aspas ao redor dos valores
+- Não deixe espaços antes ou depois do `=`
+
+Salve o arquivo: pressione `Ctrl+X`, depois `Y`, depois `Enter`.
+
+Verifique se ficou correto:
+
+```bash
+cat .env
+```
 
 ---
 
-## Passo 4 — Fazer o deploy
+## PASSO 5 — Configurar para rodar na porta 7861 (sem afetar o site atual)
 
 ```bash
-chmod +x deploy.sh
-./deploy.sh
+sed -i 's/7860:7860/7861:7860/' docker-compose.yml
 ```
-
-Aguarde ~5 minutos para o build completar.
 
 ---
 
-## Passo 5 — Verificar
+## PASSO 6 — Liberar a porta 7861 no firewall
 
 ```bash
-docker compose ps        # deve mostrar "healthy"
-curl http://localhost/   # deve retornar HTML
+ufw allow 7861
 ```
 
-O site estará disponível em `http://IP_DO_SEU_VPS`.
+```bash
+ufw allow 22
+```
+
+```bash
+ufw enable
+```
+
+Quando perguntar `Command may disrupt existing ssh connections. Proceed with operation (y|n)?`, digite `y` e pressione Enter.
 
 ---
 
-## Passo 6 — Domínio próprio (opcional)
-
-Se tiver um domínio na Hostinger:
-
-1. No painel Hostinger, aponte o domínio para o IP do VPS (registro A)
-2. Instale o Nginx como proxy reverso:
+## PASSO 7 — Build e subir o container
 
 ```bash
-sudo apt install nginx -y
-sudo nano /etc/nginx/sites-available/csnu
+docker compose -p csnu-novo up -d --build
+```
+
+Este comando vai:
+1. Baixar as imagens base (Node 22 + Python 3.13) — ~5 min na primeira vez
+2. Compilar o frontend React
+3. Instalar dependências Python
+4. Subir o container em background
+
+Acompanhe o progresso:
+
+```bash
+docker logs csnu-novo-app-1 --tail 50 -f
+```
+
+Pressione `Ctrl+C` para parar de acompanhar os logs (o container continua rodando).
+
+Quando aparecer `Uvicorn running on http://0.0.0.0:7860`, o servidor está pronto.
+
+---
+
+## PASSO 8 — Testar o novo site
+
+Abra no navegador:
+
+```
+http://SEU_IP_DO_VPS:7861
+```
+
+Teste:
+1. Conecte a carteira Phantom (rede Arc Mainnet)
+2. Clique em **CSNU Names** → pague 1 USDC → digite `Noor Wali Mehsud` → deve aparecer **SANCTIONED**
+3. Clique em **Wallet Sanctions** → pague 1 USDC → cole um endereço → verifique
+
+---
+
+## PASSO 9 — Se tudo estiver correto, substituir o site atual
+
+Pare o site antigo:
+
+```bash
+cd ~/sancoes-csnu-arc-mainnet
+docker compose down
+```
+
+Volte para a nova pasta e mude para a porta 7860:
+
+```bash
+cd ~/csnu-novo
+sed -i 's/7861:7860/7860:7860/' docker-compose.yml
+docker compose -p csnu-novo down
+docker compose up -d
+```
+
+Verifique:
+
+```bash
+docker ps
+```
+
+Deve aparecer o container rodando na porta `0.0.0.0:7860->7860/tcp`.
+
+---
+
+## PASSO 10 — Apontar o domínio (se tiver domínio na Hostinger)
+
+No painel Hostinger: **Domínios → DNS → Adicionar registro A**:
+- Nome: `@` (ou subdomínio desejado)
+- Valor: IP do VPS
+- TTL: 3600
+
+Para usar na porta 80 (sem precisar digitar `:7860`), instale o Nginx:
+
+```bash
+apt install nginx -y
+```
+
+```bash
+nano /etc/nginx/sites-available/csnu
 ```
 
 Cole:
@@ -89,48 +212,60 @@ Cole:
 ```nginx
 server {
     listen 80;
-    server_name seu-dominio.com.br;
+    server_name SEU_DOMINIO.com;
 
     location / {
         proxy_pass http://localhost:7860;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        proxy_cache_bypass $http_upgrade;
     }
 }
 ```
 
-```bash
-sudo ln -s /etc/nginx/sites-available/csnu /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-3. Instale SSL gratuito com Certbot:
+Salve (`Ctrl+X` → `Y` → `Enter`) e ative:
 
 ```bash
-sudo apt install certbot python3-certbot-nginx -y
-sudo certbot --nginx -d seu-dominio.com.br
+ln -s /etc/nginx/sites-available/csnu /etc/nginx/sites-enabled/
+nginx -t
+systemctl restart nginx
+ufw allow 80
 ```
 
 ---
 
-## Atualizar o site
+## Comandos úteis no servidor
 
-Quando houver novidades no código:
-
-```bash
-cd sancoes-csnu-arc-mainnet
-git pull
-./deploy.sh
-```
-
----
-
-## Solução de problemas
-
-| Problema | Solução |
+| Comando | Para que serve |
 |---|---|
-| Container não sobe | `docker compose logs` para ver o erro |
-| Site não abre | `docker compose ps` — verificar se está "healthy" |
-| Erro de chave privada | Verificar se `TREASURY_PRIVATE_KEY` está no `.env` sem aspas |
-| Porta 80 bloqueada | `sudo ufw allow 80` e `sudo ufw allow 443` |
+| `docker ps` | Ver containers rodando |
+| `docker logs csnu-novo-app-1 --tail 50` | Ver últimas 50 linhas do log |
+| `docker compose restart` | Reiniciar o container |
+| `docker compose down` | Parar o container |
+| `docker compose up -d` | Subir o container |
+| `docker compose up -d --build` | Rebuild e subir |
+
+---
+
+## Solução de problemas comuns
+
+**Erro: `port is already allocated`**
+```bash
+docker compose down
+docker compose up -d
+```
+
+**Erro: `no such file or directory` no `.env`**
+Verifique se está na pasta correta (`cd ~/csnu-novo`) e se o `.env` existe (`ls -la`).
+
+**Site abre mas pagamento falha**
+Verifique se `TREASURY_PRIVATE_KEY` está sem o prefixo `0x` no `.env`.
+
+**Site não abre**
+```bash
+ufw status
+docker ps
+curl http://localhost:7860
+```
