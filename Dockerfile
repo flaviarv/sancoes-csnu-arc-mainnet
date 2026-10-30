@@ -7,11 +7,11 @@ WORKDIR /app
 
 RUN npm install -g bun@1
 
-COPY package.json bun.lock* ./
+COPY frontend/package.json frontend/bun.lock* ./
 RUN bun install --frozen-lockfile
 
-COPY index.html vite.config.ts tsconfig.json tailwind.config.js postcss.config.js ./
-COPY src/ ./src/
+COPY frontend/index.html frontend/vite.config.ts frontend/tsconfig.json frontend/tailwind.config.js frontend/postcss.config.js ./
+COPY frontend/src/ ./src/
 
 RUN bunx vite build
 
@@ -26,11 +26,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY sancoes-csnu-arc/requirements.txt ./requirements.txt
+COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main_docker.py ./main.py
-COPY sancoes-csnu-arc/csnu_list.parquet ./csnu_list.parquet
+COPY csnu_list.parquet ./csnu_list.parquet
 
 COPY --from=frontend-build /app/dist ./static
 
