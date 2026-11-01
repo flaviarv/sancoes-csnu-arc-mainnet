@@ -1,3 +1,9 @@
+# ── PROTECTED ─────────────────────────────────────────────────
+# Este arquivo define os caminhos e chaves do pipeline de dados.
+# NÃO modifique sem aprovação explícita da proprietária.
+# Alterações aqui afetam todos os produtos do criptokyc.tech.
+# ──────────────────────────────────────────────────────────────
+
 """
 pipeline/config.py — caminhos e parâmetros técnicos do pipeline.
 
