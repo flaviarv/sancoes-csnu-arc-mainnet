@@ -1,3 +1,9 @@
+# ── PROTECTED ─────────────────────────────────────────────────
+# Backend principal do criptokyc.tech.
+# NÃO modifique sem aprovação explícita da proprietária.
+# Contém endereço do contrato, RPC e preço de verificação onchain.
+# ──────────────────────────────────────────────────────────────
+
 """
 main_docker.py — API backend para criptokyc.tech.
 

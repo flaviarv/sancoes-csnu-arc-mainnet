@@ -1,3 +1,9 @@
+# ── PROTECTED ─────────────────────────────────────────────────
+# Dockerfile de produção do criptokyc.tech.
+# NÃO modifique sem aprovação explícita da proprietária.
+# Alterações aqui afetam o build e o deploy na Hostinger.
+# ──────────────────────────────────────────────────────────────
+
 # ─────────────────────────────────────────────
 # Stage 1 — build do frontend React/Vite
 # ─────────────────────────────────────────────
