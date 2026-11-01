@@ -10,6 +10,8 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('csnu')
   const [isCsnuPaid, setIsCsnuPaid] = useState(false)
   const [isWalletPaid, setIsWalletPaid] = useState(false)
+  const [csnuJobId, setCsnuJobId] = useState<number | undefined>()
+  const [walletJobId, setWalletJobId] = useState<number | undefined>()
 
   return (
     <div className="min-h-dvh" style={{ background: 'linear-gradient(145deg, #f5f4f0 0%, #eef1f7 100%)' }}>
@@ -71,7 +73,7 @@ export default function App() {
             </div>
 
             {!isCsnuPaid ? (
-              <PaymentGate onPaid={() => setIsCsnuPaid(true)} serviceLabel="CSNU name search" />
+              <PaymentGate onPaid={(jid) => { setIsCsnuPaid(true); setCsnuJobId(jid) }} serviceLabel="CSNU name search" />
             ) : (
               <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 flex items-center gap-2 text-sm text-emerald-700">
                 <ShieldCheck size={15} />
@@ -80,7 +82,7 @@ export default function App() {
               </div>
             )}
 
-            <CsnuChecker isPaid={isCsnuPaid} />
+            <CsnuChecker isPaid={isCsnuPaid} jobId={csnuJobId} />
 
             <p className="text-center text-xs text-slate-400 pt-2">
               Data source: CSNU Consolidated Sanctions List (UN Security Council)
@@ -103,7 +105,7 @@ export default function App() {
             </div>
 
             {!isWalletPaid ? (
-              <PaymentGate onPaid={() => setIsWalletPaid(true)} serviceLabel="wallet sanctions search" />
+              <PaymentGate onPaid={(jid) => { setIsWalletPaid(true); setWalletJobId(jid) }} serviceLabel="wallet sanctions search" />
             ) : (
               <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 flex items-center gap-2 text-sm text-emerald-700">
                 <ShieldCheck size={15} />
@@ -112,7 +114,7 @@ export default function App() {
               </div>
             )}
 
-            <WalletChecker isPaid={isWalletPaid} />
+            <WalletChecker isPaid={isWalletPaid} jobId={walletJobId} />
 
 
           </>

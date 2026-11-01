@@ -18,9 +18,10 @@ interface CheckResponse {
 interface Props {
   onSearchComplete?: (results: NameResult[], namesText: string) => void
   isPaid: boolean
+  jobId?: number  // ERC-8183 job ID sent to backend for onchain payment verification
 }
 
-export default function CsnuChecker({ onSearchComplete, isPaid }: Props) {
+export default function CsnuChecker({ onSearchComplete, isPaid, jobId }: Props) {
   const [input, setInput] = useState('')
   const [results, setResults] = useState<NameResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -38,7 +39,7 @@ export default function CsnuChecker({ onSearchComplete, isPaid }: Props) {
       const res = await fetch(API_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ raw_input: input }),
+        body: JSON.stringify({ raw_input: input, job_id: jobId ?? 0 }),
       })
       if (!res.ok) {
         const detail: unknown = await res.json().catch(() => ({}))

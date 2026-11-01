@@ -55,7 +55,7 @@ const acAbi = [
 type Step = 'idle' | 'creating' | 'approving' | 'funding' | 'submitting' | 'done' | 'error'
 
 interface Props {
-  onPaid: () => void
+  onPaid: (jobId: number) => void  // jobId passed for backend onchain verification
   serviceLabel?: string
 }
 
@@ -93,7 +93,7 @@ export default function PaymentGate({ onPaid, serviceLabel = 'search' }: Props) 
       void Promise.resolve().then(() => {
         setStep('done')
         toast.success('Payment confirmed — search unlocked!')
-        onPaid()
+        onPaid(jobId ? Number(jobId) : 0)
       })
     }
   }, [receipt, step, onPaid])

@@ -21,9 +21,10 @@ interface CheckWalletsResponse {
 
 interface WalletCheckerProps {
   isPaid?: boolean
+  jobId?: number  // ERC-8183 job ID sent to backend for onchain payment verification
 }
 
-export function WalletChecker({ isPaid = false }: WalletCheckerProps) {
+export function WalletChecker({ isPaid = false, jobId }: WalletCheckerProps) {
   const [input, setInput] = useState('')
   const [results, setResults] = useState<WalletResult[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -43,7 +44,7 @@ export function WalletChecker({ isPaid = false }: WalletCheckerProps) {
       const res = await fetch(API_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallets }),
+        body: JSON.stringify({ wallets, job_id: jobId ?? 0 }),
       })
       if (!res.ok) {
         const err = await res.json() as { detail?: string }

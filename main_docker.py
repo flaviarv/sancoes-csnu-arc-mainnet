@@ -5,13 +5,15 @@ na raiz em vez do HTML simples do Swagger.
 """
 import os
 import sys
+import time
 import unicodedata
 from typing import List, Set, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import pandas as pd
+from web3 import Web3
 
 # Wallet sanctions pipeline — resolve path relative to this file
 _WALLETS_REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "carteiras-sancao-governamental-internacional")
@@ -20,6 +22,63 @@ if os.path.isdir(_WALLETS_REPO) and _WALLETS_REPO not in sys.path:
     print(f"Wallet repo found: {_WALLETS_REPO}")
 
 app = FastAPI(title="Verificador de Sanções CSNU")
+
+# ── Onchain payment verification ─────────────────────────────────
+_ARC_RPC = "https://rpc.mainnet.arc.io"
+_CONTRACT = "0x975a005E4107c12e585DB71059fe857449510c99"
+_SEARCH_PRICE = 1_000_000  # 1 USDC (6 decimals) — must match contract
+_GET_JOB_ABI = [{"type":"function","name":"getJob","stateMutability":"view",
+    "inputs":[{"name":"jobId","type":"uint256"}],
+    "outputs":[{"name":"","type":"tuple","components":[
+        {"name":"id","type":"uint256"},{"name":"client","type":"address"},
+        {"name":"provider","type":"address"},{"name":"evaluator","type":"address"},
+        {"name":"description","type":"string"},{"name":"budget","type":"uint256"},
+        {"name":"expiredAt","type":"uint256"},{"name":"status","type":"uint8"},
+        {"name":"hook","type":"address"},
+    ]}]}]
+
+# Rate limiting: max 10 requests per IP per minute
+_rate_limit: dict[str, list[float]] = {}
+_RATE_WINDOW = 60  # seconds
+_RATE_MAX = 10     # requests per window
+
+def _check_rate_limit(ip: str) -> None:
+    now = time.time()
+    hits = [t for t in _rate_limit.get(ip, []) if now - t < _RATE_WINDOW]
+    if len(hits) >= _RATE_MAX:
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+    hits.append(now)
+    _rate_limit[ip] = hits
+
+def _verify_job_paid(job_id: int) -> None:
+    """Verify onchain that job_id is funded (status 1) or completed (3)
+    with the correct budget. Raises HTTPException if not paid."""
+    if job_id <= 0:
+        raise HTTPException(status_code=402, detail="Payment required: no valid job_id provided.")
+    try:
+        w3 = Web3(Web3.HTTPProvider(_ARC_RPC))
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(_CONTRACT),
+            abi=_GET_JOB_ABI,
+        )
+        job = contract.functions.getJob(job_id).call()
+        # job tuple: id, client, provider, evaluator, description, budget, expiredAt, status, hook
+        status = job[7]      # 0=Open 1=Funded 2=Submitted 3=Completed 4=Rejected 5=Expired
+        budget = job[5]      # USDC amount in 6-decimal units
+        expired_at = job[6]  # unix timestamp
+        now = int(time.time())
+
+        if status not in (1, 2, 3):
+            raise HTTPException(status_code=402, detail=f"Payment required: job {job_id} status is {status} (not funded).")
+        if budget < _SEARCH_PRICE:
+            raise HTTPException(status_code=402, detail=f"Payment required: job {job_id} budget {budget} is below required {_SEARCH_PRICE}.")
+        if status in (1, 2) and expired_at < now:
+            raise HTTPException(status_code=402, detail=f"Payment expired: job {job_id} expired at {expired_at}.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        # RPC failure — fail open with a warning log (do not block users on infra issues)
+        print(f"[WARN] onchain payment check failed for job {job_id}: {e}")
 
 SANCTIONED_NAMES: Set[str] = set()
 
@@ -109,6 +168,7 @@ def startup_event():
 
 class CheckNamesRequest(BaseModel):
     raw_input: str
+    job_id: int  # ERC-8183 job ID — verified onchain before returning results
 
 class NameResult(BaseModel):
     name: str
@@ -121,7 +181,9 @@ class CheckNamesResponse(BaseModel):
 
 @app.post("/api/check-names", response_model=CheckNamesResponse)
 @app.post("/check-names", response_model=CheckNamesResponse)
-def check_names(payload: CheckNamesRequest):
+def check_names(payload: CheckNamesRequest, request: Request):
+    _check_rate_limit(request.client.host if request.client else "unknown")
+    _verify_job_paid(payload.job_id)
     if not payload.raw_input.strip():
         raise HTTPException(status_code=400, detail="Nenhum nome fornecido.")
 
@@ -147,6 +209,7 @@ def check_names(payload: CheckNamesRequest):
 
 class CheckWalletsRequest(BaseModel):
     wallets: List[str]
+    job_id: int  # ERC-8183 job ID — verified onchain before returning results
 
 class WalletResult(BaseModel):
     address: str
@@ -163,7 +226,9 @@ class CheckWalletsResponse(BaseModel):
 
 @app.post("/check-wallets", response_model=CheckWalletsResponse)
 @app.post("/api/check-wallets", response_model=CheckWalletsResponse)
-def check_wallets(payload: CheckWalletsRequest):
+def check_wallets(payload: CheckWalletsRequest, request: Request):
+    _check_rate_limit(request.client.host if request.client else "unknown")
+    _verify_job_paid(payload.job_id)
     if WALLET_RULE is None:
         raise HTTPException(status_code=503, detail="Wallet sanctions engine not available.")
     if not payload.wallets:
