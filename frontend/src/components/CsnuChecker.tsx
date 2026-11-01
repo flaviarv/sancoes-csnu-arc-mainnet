@@ -84,13 +84,7 @@ export default function CsnuChecker({ onSearchComplete, isPaid }: Props) {
         </p>
       </div>
 
-      {/* CTA */}
-      {!isPaid && (
-        <div className="rounded-2xl bg-amber-50 border border-amber-200 px-5 py-3.5 text-sm text-amber-700 flex items-center gap-2.5">
-          <AlertTriangle size={16} className="shrink-0" />
-          Connect your wallet and pay <strong>0.1 USDC</strong> per search to unlock verification.
-        </div>
-      )}
+
 
       <motion.button
         whileTap={{ scale: 0.97 }}

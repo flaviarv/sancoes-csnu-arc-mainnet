@@ -171,9 +171,7 @@ export function WalletChecker({ isPaid = false }: WalletCheckerProps) {
         </div>
       )}
 
-      <p className="text-xs text-center text-neutral-400 pb-2">
-        Data sources: OFAC (US), Israel NBCTF, UK OFSI, EU EEAS, UN Security Council, Switzerland SECO
-      </p>
+
     </div>
   )
 }

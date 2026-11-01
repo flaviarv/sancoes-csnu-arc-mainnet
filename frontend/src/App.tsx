@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { ShieldCheck, Wallet } from 'lucide-react'
-import CsnuChecker from './components/CsnuChecker'
-import PaymentGate from './components/PaymentGate'
-import { WalletChecker } from './components/WalletChecker'
+import CsnuChecker from './products/csnu-checker/CsnuChecker'
+import PaymentGate from './shared/components/PaymentGate'
+import { WalletChecker } from './products/wallet-sanctions/WalletChecker'
 
 type Tab = 'csnu' | 'wallets'
 
@@ -114,9 +114,7 @@ export default function App() {
 
             <WalletChecker isPaid={isWalletPaid} />
 
-            <p className="text-center text-xs text-slate-400 pt-2">
-              Data sources: OFAC · Israel NBCTF · UK OFSI · EU EEAS · UN CSNU · Switzerland SECO
-            </p>
+
           </>
         )}
 
