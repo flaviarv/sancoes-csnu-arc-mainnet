@@ -1,60 +1,72 @@
 """
-main_docker.py — versão Docker da API.
-Igual ao main.py, mas serve os arquivos estáticos do Vite
-na raiz em vez do HTML simples do Swagger.
+main_docker.py — API backend para criptokyc.tech.
+
+Dados: pipeline/loaders/ (CSNU nomes + carteiras sancionadas)
+Pagamentos: ERC-8183 escrow na Arc Mainnet (verificação onchain antes de retornar dados)
+Frontend: arquivos estáticos compilados em static/
 """
+
 import os
 import sys
 import time
-import unicodedata
-from typing import List, Set, Optional
+from typing import List
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-import pandas as pd
 from web3 import Web3
 
-# Wallet sanctions pipeline — lives in sanctions_engine/ within this repo
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_WALLETS_REPO = os.path.join(_HERE, "sanctions_engine")
-_DATA_DIR = os.path.join(_HERE, "data")
-if os.path.isdir(_WALLETS_REPO) and _WALLETS_REPO not in sys.path:
-    sys.path.insert(0, _WALLETS_REPO)
-    print(f"Sanctions engine found: {_WALLETS_REPO}")
+# ── Pipeline imports ─────────────────────────────────────────────────────────
+# Garante que o diretório raiz do repo está no sys.path para imports do pipeline
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
-app = FastAPI(title="Verificador de Sanções CSNU")
+from pipeline.loaders.csnu_loader import CsnuLoader
+from pipeline.loaders.wallets_loader import WalletsLoader
 
-# ── Onchain payment verification ─────────────────────────────────
-_ARC_RPC = "https://rpc.mainnet.arc.io"
+# ── App ──────────────────────────────────────────────────────────────────────
+app = FastAPI(title="criptokyc.tech API")
+
+# Instâncias dos loaders (carregadas no startup)
+_csnu = CsnuLoader()
+_wallets = WalletsLoader()
+
+# ── Onchain payment verification ─────────────────────────────────────────────
+_ARC_RPC  = "https://rpc.mainnet.arc.io"
 _CONTRACT = "0x975a005E4107c12e585DB71059fe857449510c99"
-_SEARCH_PRICE = 1_000_000  # 1 USDC (6 decimals) — must match contract
-_GET_JOB_ABI = [{"type":"function","name":"getJob","stateMutability":"view",
-    "inputs":[{"name":"jobId","type":"uint256"}],
-    "outputs":[{"name":"","type":"tuple","components":[
-        {"name":"id","type":"uint256"},{"name":"client","type":"address"},
-        {"name":"provider","type":"address"},{"name":"evaluator","type":"address"},
-        {"name":"description","type":"string"},{"name":"budget","type":"uint256"},
-        {"name":"expiredAt","type":"uint256"},{"name":"status","type":"uint8"},
-        {"name":"hook","type":"address"},
-    ]}]}]
+_SEARCH_PRICE = 1_000_000  # 1 USDC (6 decimals) — must match AgenticCommerce contract
 
-# Rate limiting: max 10 requests per IP per minute
-_rate_limit: dict[str, list[float]] = {}
-_RATE_WINDOW = 60  # seconds
-_RATE_MAX = 10     # requests per window
+_GET_JOB_ABI = [{"type": "function", "name": "getJob", "stateMutability": "view",
+    "inputs": [{"name": "jobId", "type": "uint256"}],
+    "outputs": [{"name": "", "type": "tuple", "components": [
+        {"name": "id",         "type": "uint256"},
+        {"name": "client",     "type": "address"},
+        {"name": "provider",   "type": "address"},
+        {"name": "evaluator",  "type": "address"},
+        {"name": "description","type": "string"},
+        {"name": "budget",     "type": "uint256"},
+        {"name": "expiredAt",  "type": "uint256"},
+        {"name": "status",     "type": "uint8"},
+        {"name": "hook",       "type": "address"},
+    ]}]
+}]
+
+# ── Rate limiting (in-memory, resets on restart) ──────────────────────────────
+_rate_limit: dict = {}
+_RATE_WINDOW  = 60   # seconds
+_RATE_MAX_REQ = 10   # max requests per IP per window
 
 def _check_rate_limit(ip: str) -> None:
     now = time.time()
     hits = [t for t in _rate_limit.get(ip, []) if now - t < _RATE_WINDOW]
-    if len(hits) >= _RATE_MAX:
-        raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+    if len(hits) >= _RATE_MAX_REQ:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again in a minute.")
     hits.append(now)
     _rate_limit[ip] = hits
 
 def _verify_job_paid(job_id: int) -> None:
-    """Verify onchain that job_id is funded (status 1) or completed (3)
-    with the correct budget. Raises HTTPException if not paid."""
+    """Calls getJob() on Arc Mainnet and verifies the job is funded with 1 USDC."""
     if job_id <= 0:
         raise HTTPException(status_code=402, detail="Payment required: no valid job_id provided.")
     try:
@@ -63,106 +75,36 @@ def _verify_job_paid(job_id: int) -> None:
             address=Web3.to_checksum_address(_CONTRACT),
             abi=_GET_JOB_ABI,
         )
-        job = contract.functions.getJob(job_id).call()
-        # job tuple: id, client, provider, evaluator, description, budget, expiredAt, status, hook
-        status = job[7]      # 0=Open 1=Funded 2=Submitted 3=Completed 4=Rejected 5=Expired
-        budget = job[5]      # USDC amount in 6-decimal units
-        expired_at = job[6]  # unix timestamp
-        now = int(time.time())
+        job    = contract.functions.getJob(job_id).call()
+        status = job[7]   # 0=Open 1=Funded 2=Submitted 3=Completed 4=Rejected 5=Expired
+        budget = job[5]
+        expired_at = job[6]
+        now    = int(time.time())
 
         if status not in (1, 2, 3):
-            raise HTTPException(status_code=402, detail=f"Payment required: job {job_id} status is {status} (not funded).")
+            raise HTTPException(status_code=402, detail=f"Payment required: job {job_id} status={status}.")
         if budget < _SEARCH_PRICE:
-            raise HTTPException(status_code=402, detail=f"Payment required: job {job_id} budget {budget} is below required {_SEARCH_PRICE}.")
+            raise HTTPException(status_code=402, detail=f"Payment required: job {job_id} budget {budget} below required {_SEARCH_PRICE}.")
         if status in (1, 2) and expired_at < now:
             raise HTTPException(status_code=402, detail=f"Payment expired: job {job_id} expired at {expired_at}.")
     except HTTPException:
         raise
     except Exception as e:
-        # RPC failure — fail open with a warning log (do not block users on infra issues)
+        # RPC failure — fail open with a warning (do not block users on infra issues)
         print(f"[WARN] onchain payment check failed for job {job_id}: {e}")
 
-SANCTIONED_NAMES: Set[str] = set()
-
-
-def normalize_text(text: str) -> str:
-    if not isinstance(text, str):
-        return ""
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(c for c in text if not unicodedata.combining(c))
-    return " ".join(text.strip().lower().split())
-
-
-def load_csnu_dataset(parquet_path: str = "csnu_list.parquet"):
-    global SANCTIONED_NAMES
-    try:
-        df = pd.read_parquet(parquet_path)
-    except Exception as e:
-        print(f"Erro ao carregar arquivo Parquet: {e}")
-        return
-
-    extracted_names: Set[str] = set()
-
-    for _, row in df.iterrows():
-        parts = [
-            str(row[col])
-            for col in ["FIRST_NAME", "SECOND_NAME", "THIRD_NAME", "FOURTH_NAME"]
-            if col in row and pd.notna(row[col]) and str(row[col]).strip()
-        ]
-        if parts:
-            extracted_names.add(normalize_text(" ".join(parts)))
-
-        for col in ["NAME_ORIGINAL_SCRIPT"]:
-            if col in row and pd.notna(row[col]):
-                extracted_names.add(normalize_text(str(row[col])))
-
-        if "INDIVIDUAL_ALIAS" in row and isinstance(row["INDIVIDUAL_ALIAS"], list):
-            for alias in row["INDIVIDUAL_ALIAS"]:
-                if isinstance(alias, dict) and alias.get("ALIAS_NAME"):
-                    extracted_names.add(normalize_text(str(alias["ALIAS_NAME"])))
-
-        if "ENTITY_ALIAS" in row and isinstance(row["ENTITY_ALIAS"], list):
-            for alias in row["ENTITY_ALIAS"]:
-                if isinstance(alias, dict) and alias.get("ALIAS_NAME"):
-                    extracted_names.add(normalize_text(str(alias["ALIAS_NAME"])))
-
-    SANCTIONED_NAMES = {name for name in extracted_names if name}
-    print(f"Dataset carregado: {len(SANCTIONED_NAMES)} nomes únicos indexados.")
-
-
-WALLET_RULE = None
-
-def _load_wallet_engine():
-    """Load wallet sanctions engine. Parquets live in sanctions_engine/data/carteiras/."""
-    global WALLET_RULE
-    if not os.path.isdir(_WALLETS_REPO):
-        print(f"Sanctions engine not found at: {_WALLETS_REPO}")
-        return
-    try:
-        # Pipeline resolves parquet paths via __file__ — no chdir needed
-        from src.sanctions.aggregator import UnifiedSanctionsEngine  # type: ignore[import]
-        from src.analyzer.rules.sanctions_compliance import SanctionsComplianceRule  # type: ignore[import]
-        engine = UnifiedSanctionsEngine()
-        engine.load_all()
-        WALLET_RULE = SanctionsComplianceRule(engine)
-        stats = engine.get_stats()
-        print(f"Wallet sanctions loaded: {stats['total_unique_sanctioned']} unique addresses indexed.")
-    except Exception as e:
-        print(f"Wallet sanctions engine not available: {e}")
-
+# ── Startup ───────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 def startup_event():
-    # data/csnu_list.parquet — canonical location in this repo
-    _parquet = os.path.join(_DATA_DIR, "csnu_list.parquet")
-    load_csnu_dataset(_parquet)
-    _load_wallet_engine()
+    csnu_count    = _csnu.load()
+    wallets_count = _wallets.load()
+    print(f"CSNU loaded: {csnu_count} names.")
+    print(f"Wallet sanctions loaded: {wallets_count} unique addresses.")
 
-
-# ── API ──────────────────────────────────────────────────
-
+# ── CSNU endpoint ─────────────────────────────────────────────────────────────
 class CheckNamesRequest(BaseModel):
     raw_input: str
-    job_id: int  # ERC-8183 job ID — verified onchain before returning results
+    job_id: int
 
 class NameResult(BaseModel):
     name: str
@@ -172,9 +114,8 @@ class NameResult(BaseModel):
 class CheckNamesResponse(BaseModel):
     results: List[NameResult]
 
-
 @app.post("/api/check-names", response_model=CheckNamesResponse)
-@app.post("/check-names", response_model=CheckNamesResponse)
+@app.post("/check-names",     response_model=CheckNamesResponse)
 def check_names(payload: CheckNamesRequest, request: Request):
     _check_rate_limit(request.client.host if request.client else "unknown")
     _verify_job_paid(payload.job_id)
@@ -183,27 +124,25 @@ def check_names(payload: CheckNamesRequest, request: Request):
 
     results = []
     for line in payload.raw_input.splitlines():
-        line_clean = line.strip()
-        if not line_clean:
+        name = line.strip()
+        if not name:
             continue
-        is_in_csnu = normalize_text(line_clean) in SANCTIONED_NAMES
+        found = _csnu.contains(name)
         results.append(NameResult(
-            name=line_clean,
-            is_contained=is_in_csnu,
+            name=name,
+            is_contained=found,
             message=(
-                f"O nome '{line_clean}' está contido na lista CSNU."
-                if is_in_csnu else
-                f"O nome '{line_clean}' não está contido na lista do CSNU."
+                f"O nome '{name}' está contido na lista CSNU."
+                if found else
+                f"O nome '{name}' não está contido na lista do CSNU."
             ),
         ))
     return CheckNamesResponse(results=results)
 
-
-# ── Wallet Sanctions Endpoint ─────────────────────────────
-
+# ── Wallet Sanctions endpoint ─────────────────────────────────────────────────
 class CheckWalletsRequest(BaseModel):
     wallets: List[str]
-    job_id: int  # ERC-8183 job ID — verified onchain before returning results
+    job_id: int
 
 class WalletResult(BaseModel):
     address: str
@@ -218,124 +157,100 @@ class CheckWalletsResponse(BaseModel):
     total: int
     sanctioned_count: int
 
-@app.post("/check-wallets", response_model=CheckWalletsResponse)
 @app.post("/api/check-wallets", response_model=CheckWalletsResponse)
+@app.post("/check-wallets",     response_model=CheckWalletsResponse)
 def check_wallets(payload: CheckWalletsRequest, request: Request):
     _check_rate_limit(request.client.host if request.client else "unknown")
     _verify_job_paid(payload.job_id)
-    if WALLET_RULE is None:
-        raise HTTPException(status_code=503, detail="Wallet sanctions engine not available.")
     if not payload.wallets:
         raise HTTPException(status_code=400, detail="Nenhuma carteira fornecida.")
+    if _wallets.count == 0:
+        raise HTTPException(status_code=503, detail="Wallet sanctions engine not available.")
 
     results = []
-    try:
-        for addr in payload.wallets:
-            addr = addr.strip()
-            if not addr:
-                continue
-            report = WALLET_RULE.evaluate(addr)
-            results.append(WalletResult(
-                address=addr,
-                chain=report.get("chain", "Não identificada"),
-                is_sanctioned=report["is_sanctioned"],
-                verdict_status=report["verdict_status"],
-                verdict_summary=report["verdict_summary"],
-                sources=report.get("sources", []),
-            ))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    for addr in payload.wallets:
+        addr = addr.strip()
+        if not addr:
+            continue
+        report = _wallets.check(addr)
+        results.append(WalletResult(
+            address=report["address"],
+            chain=report["chain"] or "Não identificada",
+            is_sanctioned=report["is_sanctioned"],
+            verdict_status=report["verdict_status"],
+            verdict_summary=report["verdict_summary"],
+            sources=report["sources"],
+        ))
 
     sanctioned = sum(1 for r in results if r.is_sanctioned)
     return CheckWalletsResponse(results=results, total=len(results), sanctioned_count=sanctioned)
 
-
-# ── ERC-8183 complete-job ────────────────────────────────
-
+# ── ERC-8183 complete-job ─────────────────────────────────────────────────────
 class CompleteJobRequest(BaseModel):
     job_id: int
 
 @app.post("/api/complete-job")
 @app.post("/complete-job")
 def complete_job(payload: CompleteJobRequest):
-    """Called by the frontend after fund(). Backend calls submit() + complete() as treasury."""
+    """Called by frontend after fund(). Backend calls submit() + complete() as treasury."""
     private_key_raw = os.environ.get("TREASURY_PRIVATE_KEY", "")
     if not private_key_raw:
         raise HTTPException(status_code=500, detail="TREASURY_PRIVATE_KEY not configured.")
     private_key = private_key_raw if private_key_raw.startswith("0x") else f"0x{private_key_raw}"
 
     try:
-        from web3 import Web3
-        RPC = "https://rpc.mainnet.arc.io"
-        CONTRACT = "0x975a005E4107c12e585DB71059fe857449510c99"
-        TREASURY = "0xd2f80f6cf27483392f70f21b3381109f9c33c390"
-        w3 = Web3(Web3.HTTPProvider(RPC))
+        w3   = Web3(Web3.HTTPProvider(_ARC_RPC))
         acct = w3.eth.account.from_key(private_key)
 
         ABI = [
-            {"type":"function","name":"submit","stateMutability":"nonpayable",
-             "inputs":[{"name":"jobId","type":"uint256"},{"name":"deliverable","type":"bytes32"},{"name":"optParams","type":"bytes"}],"outputs":[]},
-            {"type":"function","name":"complete","stateMutability":"nonpayable",
-             "inputs":[{"name":"jobId","type":"uint256"},{"name":"reason","type":"bytes32"},{"name":"optParams","type":"bytes"}],"outputs":[]},
-            {"type":"function","name":"getJob","stateMutability":"view",
-             "inputs":[{"name":"jobId","type":"uint256"}],
-             "outputs":[{"name":"","type":"tuple","components":[
-                 {"name":"id","type":"uint256"},{"name":"client","type":"address"},
-                 {"name":"provider","type":"address"},{"name":"evaluator","type":"address"},
-                 {"name":"description","type":"string"},{"name":"budget","type":"uint256"},
-                 {"name":"expiredAt","type":"uint256"},{"name":"status","type":"uint8"},
-                 {"name":"hook","type":"address"}
+            {"type": "function", "name": "submit",   "stateMutability": "nonpayable",
+             "inputs": [{"name": "jobId", "type": "uint256"}, {"name": "deliverable", "type": "bytes32"}, {"name": "optParams", "type": "bytes"}], "outputs": []},
+            {"type": "function", "name": "complete",  "stateMutability": "nonpayable",
+             "inputs": [{"name": "jobId", "type": "uint256"}, {"name": "reason",      "type": "bytes32"}, {"name": "optParams", "type": "bytes"}], "outputs": []},
+            {"type": "function", "name": "getJob",    "stateMutability": "view",
+             "inputs": [{"name": "jobId", "type": "uint256"}],
+             "outputs": [{"name": "", "type": "tuple", "components": [
+                 {"name": "id", "type": "uint256"}, {"name": "client", "type": "address"},
+                 {"name": "provider", "type": "address"}, {"name": "evaluator", "type": "address"},
+                 {"name": "description", "type": "string"}, {"name": "budget", "type": "uint256"},
+                 {"name": "expiredAt", "type": "uint256"}, {"name": "status", "type": "uint8"},
+                 {"name": "hook", "type": "address"},
              ]}]},
         ]
 
-        contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT), abi=ABI)
-        job = contract.functions.getJob(payload.job_id).call()
-        status = job[7]  # JobStatus enum
-        provider = job[2]
-        evaluator = job[3]
+        contract = w3.eth.contract(address=Web3.to_checksum_address(_CONTRACT), abi=ABI)
+        job      = contract.functions.getJob(payload.job_id).call()
+        status, provider, evaluator = job[7], job[2], job[3]
 
-        # Only proceed if job is Funded (1) or Submitted (2)
-        if status == 1:  # Funded — need submit() first
-            # submit() must be called by provider
-            if acct.address.lower() == provider.lower():
-                nonce = w3.eth.get_transaction_count(acct.address)
-                tx = contract.functions.submit(
-                    payload.job_id, b'\x00' * 32, b''
-                ).build_transaction({'from': acct.address, 'nonce': nonce, 'gas': 200000, 'gasPrice': w3.eth.gas_price})
-                signed = acct.sign_transaction(tx)
-                w3.eth.send_raw_transaction(signed.raw_transaction)
-                w3.eth.wait_for_transaction_receipt(signed.hash, timeout=120)
-                status = 2  # now Submitted
+        if status == 1 and acct.address.lower() == provider.lower():
+            nonce = w3.eth.get_transaction_count(acct.address)
+            tx    = contract.functions.submit(payload.job_id, b"\x00" * 32, b"").build_transaction(
+                {"from": acct.address, "nonce": nonce, "gas": 200000, "gasPrice": w3.eth.gas_price})
+            signed = acct.sign_transaction(tx)
+            w3.eth.send_raw_transaction(signed.raw_transaction)
+            w3.eth.wait_for_transaction_receipt(signed.hash, timeout=120)
+            status = 2
 
-        if status == 2:  # Submitted — evaluator calls complete()
-            if acct.address.lower() == evaluator.lower():
-                nonce = w3.eth.get_transaction_count(acct.address)
-                tx = contract.functions.complete(
-                    payload.job_id, b'\x00' * 32, b''
-                ).build_transaction({'from': acct.address, 'nonce': nonce, 'gas': 200000, 'gasPrice': w3.eth.gas_price})
-                signed = acct.sign_transaction(tx)
-                txh = w3.eth.send_raw_transaction(signed.raw_transaction)
-                receipt = w3.eth.wait_for_transaction_receipt(txh, timeout=120)
-                return {"status": "completed", "tx": receipt.transactionHash.hex()}
-            else:
-                return {"status": "skipped", "reason": f"Treasury {acct.address} is not evaluator {evaluator} for this job."}
+        if status == 2 and acct.address.lower() == evaluator.lower():
+            nonce  = w3.eth.get_transaction_count(acct.address)
+            tx     = contract.functions.complete(payload.job_id, b"\x00" * 32, b"").build_transaction(
+                {"from": acct.address, "nonce": nonce, "gas": 200000, "gasPrice": w3.eth.gas_price})
+            signed = acct.sign_transaction(tx)
+            txh    = w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = w3.eth.wait_for_transaction_receipt(txh, timeout=120)
+            return {"status": "completed", "tx": receipt.transactionHash.hex()}
 
         return {"status": "skipped", "job_status": status}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ── Frontend estático ────────────────────────────────────
-
+# ── Frontend estático ─────────────────────────────────────────────────────────
 STATIC_DIR = "static"
 
 if os.path.isdir(STATIC_DIR):
-    # Serve arquivos JS/CSS/assets
     app.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
 
-    @app.get("/", include_in_schema=False)
-    @app.get("/{full_path:path}", include_in_schema=False)
+    @app.get("/",                    include_in_schema=False)
+    @app.get("/{full_path:path}",    include_in_schema=False)
     def serve_spa(full_path: str = ""):
-        # Rotas da API já foram tratadas acima — aqui só chega o frontend
-        index = os.path.join(STATIC_DIR, "index.html")
-        return FileResponse(index)
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
