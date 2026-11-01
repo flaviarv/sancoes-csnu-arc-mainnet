@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, useSwitchChain, useChainId } from 'wagmi'
 import { erc20Abi, parseEventLogs, type Address } from 'viem'
 import { arc } from 'viem/chains'
-import { Wallet, Coins, Loader2, CheckCircle2, ExternalLink, AlertCircle } from 'lucide-react'
+import { Wallet, Coins, Loader2, CheckCircle2, ExternalLink } from 'lucide-react'
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
 
@@ -63,7 +63,6 @@ export default function PaymentGate({ onPaid, serviceLabel = 'search' }: Props) 
   const { address, isConnected } = useAccount()
   const chainId = useChainId()
   const { switchChainAsync } = useSwitchChain()
-  const isWrongChain = isConnected && chainId !== arc.id
   const [step, setStep] = useState<Step>('idle')
   const [jobId, setJobId] = useState<bigint | null>(null)
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>()
@@ -256,14 +255,6 @@ export default function PaymentGate({ onPaid, serviceLabel = 'search' }: Props) 
           <p className="text-sm font-semibold text-slate-700 tabular-nums">{formattedBalance} USDC</p>
         </div>
       </div>
-
-      {/* Wrong chain warning */}
-      {isWrongChain && (
-        <div className="flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs text-amber-700">
-          <AlertCircle size={13} className="mt-0.5 shrink-0 text-amber-500" />
-          <span>Wrong network detected. Clicking Pay will switch to <strong>Arc Mainnet</strong> automatically.</span>
-        </div>
-      )}
 
       {/* Price row */}
       <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-100">
