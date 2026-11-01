@@ -15,11 +15,13 @@ from pydantic import BaseModel
 import pandas as pd
 from web3 import Web3
 
-# Wallet sanctions pipeline — resolve path relative to this file
-_WALLETS_REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "carteiras-sancao-governamental-internacional")
+# Wallet sanctions pipeline — lives in sanctions_engine/ within this repo
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_WALLETS_REPO = os.path.join(_HERE, "sanctions_engine")
+_DATA_DIR = os.path.join(_HERE, "data")
 if os.path.isdir(_WALLETS_REPO) and _WALLETS_REPO not in sys.path:
     sys.path.insert(0, _WALLETS_REPO)
-    print(f"Wallet repo found: {_WALLETS_REPO}")
+    print(f"Sanctions engine found: {_WALLETS_REPO}")
 
 app = FastAPI(title="Verificador de Sanções CSNU")
 
@@ -131,15 +133,13 @@ def load_csnu_dataset(parquet_path: str = "csnu_list.parquet"):
 WALLET_RULE = None
 
 def _load_wallet_engine():
-    """Load wallet sanctions engine with proper working directory."""
+    """Load wallet sanctions engine. Parquets live in sanctions_engine/data/carteiras/."""
     global WALLET_RULE
     if not os.path.isdir(_WALLETS_REPO):
-        print(f"Wallet repo not found at: {_WALLETS_REPO}")
+        print(f"Sanctions engine not found at: {_WALLETS_REPO}")
         return
-    orig = os.getcwd()
     try:
-        os.chdir(_WALLETS_REPO)
-        # Import after chdir so relative paths in the pipeline resolve correctly
+        # Pipeline resolves parquet paths via __file__ — no chdir needed
         from src.sanctions.aggregator import UnifiedSanctionsEngine  # type: ignore[import]
         from src.analyzer.rules.sanctions_compliance import SanctionsComplianceRule  # type: ignore[import]
         engine = UnifiedSanctionsEngine()
@@ -149,17 +149,11 @@ def _load_wallet_engine():
         print(f"Wallet sanctions loaded: {stats['total_unique_sanctioned']} unique addresses indexed.")
     except Exception as e:
         print(f"Wallet sanctions engine not available: {e}")
-    finally:
-        os.chdir(orig)
 
 @app.on_event("startup")
 def startup_event():
-    # Resolve parquet path relative to this file (works in both dev and Docker)
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _parquet = os.path.join(_here, "sancoes-csnu-arc", "csnu_list.parquet")
-    if not os.path.isfile(_parquet):
-        # fallback: same directory as this file
-        _parquet = os.path.join(_here, "csnu_list.parquet")
+    # data/csnu_list.parquet — canonical location in this repo
+    _parquet = os.path.join(_DATA_DIR, "csnu_list.parquet")
     load_csnu_dataset(_parquet)
     _load_wallet_engine()
 
@@ -235,10 +229,7 @@ def check_wallets(payload: CheckWalletsRequest, request: Request):
         raise HTTPException(status_code=400, detail="Nenhuma carteira fornecida.")
 
     results = []
-    orig = os.getcwd()
     try:
-        if os.path.isdir(_WALLETS_REPO):
-            os.chdir(_WALLETS_REPO)
         for addr in payload.wallets:
             addr = addr.strip()
             if not addr:
@@ -252,8 +243,8 @@ def check_wallets(payload: CheckWalletsRequest, request: Request):
                 verdict_summary=report["verdict_summary"],
                 sources=report.get("sources", []),
             ))
-    finally:
-        os.chdir(orig)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     sanctioned = sum(1 for r in results if r.is_sanctioned)
     return CheckWalletsResponse(results=results, total=len(results), sanctioned_count=sanctioned)
