@@ -262,25 +262,6 @@ export default function PaymentGate({ onPaid, serviceLabel = 'search' }: Props) 
         <span className="text-sm font-bold text-slate-800 tabular-nums">1.00 USDC</span>
       </div>
 
-      {/* Timeout comparison */}
-      <div className="rounded-xl border border-slate-100 overflow-hidden text-xs">
-        <div className="px-3 py-2 bg-slate-50 text-slate-500 font-semibold uppercase tracking-wide" style={{ letterSpacing: '0.07em' }}>
-          Confirmation timeout
-        </div>
-        <div className="flex divide-x divide-slate-100">
-          <div className="flex-1 px-3 py-2.5 bg-white">
-            <p className="text-slate-400 mb-0.5">Default (viem)</p>
-            <p className="font-bold text-slate-500 tabular-nums line-through">3 min</p>
-            <p className="text-slate-400">180 000 ms</p>
-          </div>
-          <div className="flex-1 px-3 py-2.5 bg-blue-50">
-            <p className="text-blue-500 mb-0.5">Current config</p>
-            <p className="font-bold text-blue-700 tabular-nums">10 min</p>
-            <p className="text-blue-400">600 000 ms</p>
-          </div>
-        </div>
-      </div>
-
       {/* Step progress */}
       <AnimatePresence>
         {isProcessing && (
