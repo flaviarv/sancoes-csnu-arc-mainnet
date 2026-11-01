@@ -1,3 +1,9 @@
+// ── PROTECTED ─────────────────────────────────────────────────
+// Este arquivo define as regras de negócio do criptokyc.tech.
+// NÃO modifique sem aprovação explícita da proprietária.
+// Alterações aqui afetam preços, carteiras e contratos em produção.
+// ──────────────────────────────────────────────────────────────
+
 /**
  * ╔══════════════════════════════════════════════════════════════╗
  * ║  BUSINESS RULES — criptokyc.tech                            ║
