@@ -244,6 +244,30 @@ def complete_job(payload: CompleteJobRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ── Reload data ───────────────────────────────────────────────────────────────
+# Called by deploy_to_hostinger.sh after new parquets are synced.
+# Protected by RELOAD_SECRET env var — set a strong random value in .env.
+
+class ReloadResponse(BaseModel):
+    status: str
+    csnu_count: int
+    wallets_count: int
+
+@app.post("/reload-data", response_model=ReloadResponse)
+def reload_data(request: Request):
+    secret = os.environ.get("RELOAD_SECRET", "")
+    if not secret:
+        raise HTTPException(status_code=503, detail="RELOAD_SECRET not configured on server.")
+    provided = request.headers.get("X-Reload-Secret", "")
+    if provided != secret:
+        raise HTTPException(status_code=401, detail="Invalid reload secret.")
+    csnu_count    = _csnu.load()
+    wallets_count = _wallets.load()
+    print(f"[reload-data] CSNU reloaded: {csnu_count} names.")
+    print(f"[reload-data] Wallets reloaded: {wallets_count} addresses.")
+    return ReloadResponse(status="ok", csnu_count=csnu_count, wallets_count=wallets_count)
+
+
 # ── Frontend estático ─────────────────────────────────────────────────────────
 STATIC_DIR = "static"
 
