@@ -45,15 +45,15 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Código e dados do backend
-COPY main_docker.py ./main.py
-COPY csnu_list.parquet ./csnu_list.parquet
+COPY main_docker.py ./main_docker.py
 
-# Pipeline de carteiras sancionadas
-COPY carteiras-sancao-governamental-internacional/ ./carteiras-sancao-governamental-internacional/
+# Pipeline de dados (código) e parquets (dados)
+COPY pipeline/ ./pipeline/
+COPY data/ ./data/
 
 # Frontend compilado (do stage 1)
 COPY --from=frontend-build /app/dist ./static
 
 EXPOSE 7860
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "main_docker:app", "--host", "0.0.0.0", "--port", "7860"]
