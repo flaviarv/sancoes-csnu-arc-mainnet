@@ -1,17 +1,42 @@
 import { useState } from 'react'
 import { ShieldCheck, Wallet } from 'lucide-react'
 import CsnuChecker from './products/csnu-checker/CsnuChecker'
-import PaymentGate from './shared/components/PaymentGate'
+import PaymentGate, { type PaidSession } from './shared/components/PaymentGate'
 import { WalletChecker } from './products/wallet-sanctions/WalletChecker'
 
 type Tab = 'csnu' | 'wallets'
 
+// Paid sessions survive a page refresh (sessionStorage) until the backend-issued expiry.
+const storageKey = (scope: Tab) => `ck_session_${scope}`
+
+function loadSession(scope: Tab): PaidSession | null {
+  try {
+    const raw = sessionStorage.getItem(storageKey(scope))
+    if (!raw) return null
+    const s = JSON.parse(raw) as PaidSession
+    return s.expiresAt * 1000 > Date.now() ? s : null
+  } catch {
+    return null
+  }
+}
+
+function saveSession(scope: Tab, session: PaidSession | null) {
+  if (session) sessionStorage.setItem(storageKey(scope), JSON.stringify(session))
+  else sessionStorage.removeItem(storageKey(scope))
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('csnu')
-  const [isCsnuPaid, setIsCsnuPaid] = useState(false)
-  const [isWalletPaid, setIsWalletPaid] = useState(false)
-  const [csnuJobId, setCsnuJobId] = useState<number | undefined>()
-  const [walletJobId, setWalletJobId] = useState<number | undefined>()
+  const [csnuSession, setCsnuSession] = useState<PaidSession | null>(() => loadSession('csnu'))
+  const [walletSession, setWalletSession] = useState<PaidSession | null>(() => loadSession('wallets'))
+  const isCsnuPaid = csnuSession !== null
+  const isWalletPaid = walletSession !== null
+
+  const updateSession = (scope: Tab, session: PaidSession | null) => {
+    saveSession(scope, session)
+    if (scope === 'csnu') setCsnuSession(session)
+    else setWalletSession(session)
+  }
 
   return (
     <div className="min-h-dvh" style={{ background: 'linear-gradient(145deg, #f5f4f0 0%, #eef1f7 100%)' }}>
@@ -73,7 +98,7 @@ export default function App() {
             </div>
 
             {!isCsnuPaid ? (
-              <PaymentGate onPaid={(jid) => { setIsCsnuPaid(true); setCsnuJobId(jid) }} serviceLabel="CSNU name search" />
+              <PaymentGate scope="csnu" onPaid={(session) => updateSession('csnu', session)} serviceLabel="CSNU name search" />
             ) : (
               <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 flex items-center gap-2 text-sm text-emerald-700">
                 <ShieldCheck size={15} />
@@ -82,7 +107,7 @@ export default function App() {
               </div>
             )}
 
-            <CsnuChecker isPaid={isCsnuPaid} jobId={csnuJobId} />
+            <CsnuChecker isPaid={isCsnuPaid} sessionToken={csnuSession?.token} onSessionExpired={() => updateSession('csnu', null)} />
 
             <p className="text-center text-xs text-slate-400 pt-2">
               Data source: CSNU Consolidated Sanctions List (UN Security Council)
@@ -105,7 +130,7 @@ export default function App() {
             </div>
 
             {!isWalletPaid ? (
-              <PaymentGate onPaid={(jid) => { setIsWalletPaid(true); setWalletJobId(jid) }} serviceLabel="wallet sanctions search" />
+              <PaymentGate scope="wallets" onPaid={(session) => updateSession('wallets', session)} serviceLabel="wallet sanctions search" />
             ) : (
               <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 flex items-center gap-2 text-sm text-emerald-700">
                 <ShieldCheck size={15} />
@@ -114,7 +139,7 @@ export default function App() {
               </div>
             )}
 
-            <WalletChecker isPaid={isWalletPaid} jobId={walletJobId} />
+            <WalletChecker isPaid={isWalletPaid} sessionToken={walletSession?.token} onSessionExpired={() => updateSession('wallets', null)} />
 
 
           </>

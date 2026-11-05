@@ -11,3 +11,5 @@ __pycache__/
 recovery_file*.dat
 *private_key*
 *secret*
+# Runtime state (pagamentos já usados)
+state/

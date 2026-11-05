@@ -21,10 +21,11 @@ interface CheckWalletsResponse {
 
 interface WalletCheckerProps {
   isPaid?: boolean
-  jobId?: number  // ERC-8183 job ID sent to backend for onchain payment verification
+  sessionToken?: string          // session issued by the backend after a verified payment
+  onSessionExpired?: () => void  // called when the backend rejects the session (401)
 }
 
-export function WalletChecker({ isPaid = false, jobId }: WalletCheckerProps) {
+export function WalletChecker({ isPaid = false, sessionToken, onSessionExpired }: WalletCheckerProps) {
   const [input, setInput] = useState('')
   const [results, setResults] = useState<WalletResult[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -44,8 +45,9 @@ export function WalletChecker({ isPaid = false, jobId }: WalletCheckerProps) {
       const res = await fetch(API_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallets, job_id: jobId ?? 0 }),
+        body: JSON.stringify({ wallets, session_token: sessionToken ?? '' }),
       })
+      if (res.status === 401) onSessionExpired?.()
       if (!res.ok) {
         const err = await res.json() as { detail?: string }
         throw new Error(err.detail ?? `HTTP ${res.status}`)

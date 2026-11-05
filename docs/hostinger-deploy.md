@@ -3,7 +3,7 @@
 ## Pré-requisitos
 - VPS Hostinger com Ubuntu 22.04 ou 24.04
 - Docker Desktop rodando na sua máquina (para testes locais)
-- Credenciais: TREASURY_PRIVATE_KEY, CIRCLE_API_KEY, CIRCLE_ENTITY_SECRET
+- Credenciais: TREASURY_PRIVATE_KEY (obrigatória) e SESSION_SECRET (recomendada)
 
 ---
 
@@ -42,7 +42,7 @@ cd sancoes-csnu-arc-mainnet
 ls
 ```
 
-Você deve ver: `Dockerfile`, `docker-compose.yml`, `main_docker.py`, `csnu_list.parquet`, `frontend/`, `carteiras-sancao-governamental-internacional/`
+Você deve ver: `Dockerfile`, `docker-compose.yml`, `main_docker.py`, `pipeline/`, `data/`, `frontend/`
 
 ---
 
@@ -56,8 +56,7 @@ Cole exatamente isso (substitua pelos valores reais):
 
 ```
 TREASURY_PRIVATE_KEY=suachaveprivadaSEM0x
-CIRCLE_API_KEY=sua_live_api_key_circle
-CIRCLE_ENTITY_SECRET=seu_entity_secret_circle
+SESSION_SECRET=gere_com_openssl_rand_-hex_32
 ```
 
 Salvar: pressione `Ctrl+X`, depois `Y`, depois `Enter`.

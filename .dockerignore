@@ -8,3 +8,4 @@ sancoes-csnu-arc/__pycache__/
 sancoes-csnu-arc/.git/
 .git/
 *.log
+state/

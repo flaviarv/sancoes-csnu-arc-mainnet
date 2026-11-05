@@ -18,10 +18,11 @@ interface CheckResponse {
 interface Props {
   onSearchComplete?: (results: NameResult[], namesText: string) => void
   isPaid: boolean
-  jobId?: number  // ERC-8183 job ID sent to backend for onchain payment verification
+  sessionToken?: string          // session issued by the backend after a verified payment
+  onSessionExpired?: () => void  // called when the backend rejects the session (401)
 }
 
-export default function CsnuChecker({ onSearchComplete, isPaid, jobId }: Props) {
+export default function CsnuChecker({ onSearchComplete, isPaid, sessionToken, onSessionExpired }: Props) {
   const [input, setInput] = useState('')
   const [results, setResults] = useState<NameResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -39,8 +40,9 @@ export default function CsnuChecker({ onSearchComplete, isPaid, jobId }: Props) 
       const res = await fetch(API_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ raw_input: input, job_id: jobId ?? 0 }),
+        body: JSON.stringify({ raw_input: input, session_token: sessionToken ?? '' }),
       })
+      if (res.status === 401) onSessionExpired?.()
       if (!res.ok) {
         const detail: unknown = await res.json().catch(() => ({}))
         const detailMsg = typeof (detail as Record<string, unknown>)?.detail === 'string'

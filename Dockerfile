@@ -56,4 +56,4 @@ COPY --from=frontend-build /app/dist ./static
 
 EXPOSE 7860
 
-CMD ["uvicorn", "main_docker:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "main_docker:app", "--host", "0.0.0.0", "--port", "7860", "--proxy-headers", "--forwarded-allow-ips", "*"]

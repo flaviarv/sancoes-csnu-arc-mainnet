@@ -12,10 +12,18 @@ Pagamentos: ERC-8183 escrow na Arc Mainnet (verificação onchain antes de retor
 Frontend: arquivos estáticos compilados em static/
 """
 
+import base64
+import hashlib
+import hmac
+import json
 import os
+import secrets
 import sys
+import threading
 import time
 from typing import List
+from eth_account import Account
+from eth_account.messages import encode_defunct
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -71,37 +79,159 @@ def _check_rate_limit(ip: str) -> None:
     hits.append(now)
     _rate_limit[ip] = hits
 
-def _verify_job_paid(job_id: int) -> None:
-    """Calls getJob() on Arc Mainnet and verifies the job is funded with 1 USDC."""
-    if job_id <= 0:
-        raise HTTPException(status_code=402, detail="Payment required: no valid job_id provided.")
-    try:
-        w3 = Web3(Web3.HTTPProvider(_ARC_RPC))
-        contract = w3.eth.contract(
-            address=Web3.to_checksum_address(_CONTRACT),
-            abi=_GET_JOB_ABI,
-        )
-        job    = contract.functions.getJob(job_id).call()
-        status = job[7]   # 0=Open 1=Funded 2=Submitted 3=Completed 4=Rejected 5=Expired
-        budget = job[5]
-        expired_at = job[6]
-        now    = int(time.time())
+def _client_ip(request: Request) -> str:
+    """IP real do visitante. Atrás do proxy (Caddy), uvicorn --proxy-headers
+    resolve X-Forwarded-For em request.client.host."""
+    return request.client.host if request.client else "unknown"
 
-        if status not in (1, 2, 3):
-            raise HTTPException(status_code=402, detail=f"Payment required: job {job_id} status={status}.")
-        if budget < _SEARCH_PRICE:
-            raise HTTPException(status_code=402, detail=f"Payment required: job {job_id} budget {budget} below required {_SEARCH_PRICE}.")
-        if status in (1, 2) and expired_at < now:
-            raise HTTPException(status_code=402, detail=f"Payment expired: job {job_id} expired at {expired_at}.")
+
+# ── Onchain job lookup ────────────────────────────────────────────────────────
+def _load_paid_job(job_id: int):
+    """Lê o job na Arc Mainnet. Só aceita job COMPLETED com orçamento >= preço.
+    Completed = o USDC já foi liberado para a treasury (irreversível, sem refund).
+    Falha do RPC => 503 (fail-closed): nunca libera acesso sem confirmar o pagamento."""
+    if job_id <= 0:
+        raise HTTPException(status_code=402, detail="Payment required: no valid job.")
+    try:
+        w3 = Web3(Web3.HTTPProvider(_ARC_RPC, request_kwargs={"timeout": 15}))
+        contract = w3.eth.contract(address=Web3.to_checksum_address(_CONTRACT), abi=_GET_JOB_ABI)
+        job = contract.functions.getJob(job_id).call()
+    except Exception as e:
+        print(f"[WARN] onchain lookup failed for job {job_id}: {e}")
+        raise HTTPException(status_code=503, detail="Could not verify payment onchain. Try again shortly.")
+    status, budget = job[7], job[5]   # 0=Open 1=Funded 2=Submitted 3=Completed 4=Rejected 5=Expired
+    if status != 3:
+        raise HTTPException(status_code=402, detail=f"Payment not completed: job {job_id} status={status}.")
+    if budget < _SEARCH_PRICE:
+        raise HTTPException(status_code=402, detail=f"Payment too low: job {job_id}.")
+    return job
+
+
+# ── Sessions: 1 job pago = 1 sessão, só para a carteira que pagou ─────────────
+_SCOPES = {"csnu", "wallets"}
+_SESSION_TTL = int(os.environ.get("SESSION_TTL_SECONDS", "1800"))      # 30 min
+_SIGNATURE_MAX_AGE = 300                                               # 5 min
+# Defina SESSION_SECRET no .env para sessões sobreviverem a reinícios do container.
+_SESSION_SECRET = (os.environ.get("SESSION_SECRET") or secrets.token_hex(32)).encode()
+
+_USED_JOBS_FILE = os.environ.get("USED_JOBS_FILE", os.path.join(_REPO_ROOT, "state", "used_jobs.json"))
+_used_jobs: set = set()
+_used_lock = threading.Lock()
+
+
+def _load_used_jobs() -> None:
+    try:
+        with open(_USED_JOBS_FILE, encoding="utf-8") as f:
+            _used_jobs.update(int(x) for x in json.load(f))
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        # Arquivo corrompido: não ignorar em silêncio (permitiria reuso de jobs).
+        raise RuntimeError(f"Could not read {_USED_JOBS_FILE}: {e}")
+
+
+def _persist_used_jobs() -> None:
+    os.makedirs(os.path.dirname(_USED_JOBS_FILE), exist_ok=True)
+    tmp = _USED_JOBS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(sorted(_used_jobs), f)
+    os.replace(tmp, _USED_JOBS_FILE)
+
+
+def _session_message(job_id: int, scope: str, issued_at: int) -> str:
+    # O frontend monta exatamente este texto para a carteira assinar.
+    return (
+        "criptokyc.tech - acesso a consulta\n"
+        f"Produto: {scope}\n"
+        f"Job: {job_id}\n"
+        "Rede: Arc Mainnet (5042)\n"
+        f"Emitido em: {issued_at}"
+    )
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def _sign_token(payload: dict) -> str:
+    body = _b64(json.dumps(payload, separators=(",", ":")).encode())
+    sig = hmac.new(_SESSION_SECRET, body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def _require_session(token: str, scope: str) -> dict:
+    """Valida o token de sessão (assinatura HMAC, validade e produto)."""
+    invalid = HTTPException(status_code=401, detail="Session invalid or expired. Please pay again.")
+    try:
+        body, sig = token.split(".", 1)
+        expected = hmac.new(_SESSION_SECRET, body.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            raise invalid
+        padded = body + "=" * (-len(body) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
     except HTTPException:
         raise
-    except Exception as e:
-        # RPC failure — fail open with a warning (do not block users on infra issues)
-        print(f"[WARN] onchain payment check failed for job {job_id}: {e}")
+    except Exception:
+        raise invalid
+    if payload.get("s") != scope or int(payload.get("e", 0)) < int(time.time()):
+        raise invalid
+    return payload
+
+
+class SessionRequest(BaseModel):
+    job_id: int
+    scope: str
+    issued_at: int
+    signature: str
+
+
+class SessionResponse(BaseModel):
+    session_token: str
+    expires_at: int
+
+
+@app.post("/api/session", response_model=SessionResponse)
+@app.post("/session",     response_model=SessionResponse)
+def create_session(payload: SessionRequest, request: Request):
+    """Troca um job pago por uma sessão. Exige assinatura da carteira que pagou
+    (client do job) e cada job só pode gerar UMA sessão."""
+    _check_rate_limit(_client_ip(request))
+    if payload.scope not in _SCOPES:
+        raise HTTPException(status_code=400, detail="Unknown product.")
+    now = int(time.time())
+    if abs(now - payload.issued_at) > _SIGNATURE_MAX_AGE:
+        raise HTTPException(status_code=401, detail="Signature expired. Sign again.")
+
+    try:
+        message = encode_defunct(text=_session_message(payload.job_id, payload.scope, payload.issued_at))
+        signer = Account.recover_message(message, signature=payload.signature)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid signature.")
+
+    job = _load_paid_job(payload.job_id)
+    if signer.lower() != str(job[1]).lower():
+        raise HTTPException(status_code=403, detail="Only the wallet that paid this job can unlock it.")
+
+    with _used_lock:
+        if payload.job_id in _used_jobs:
+            raise HTTPException(status_code=409, detail="This payment was already used. Please pay again.")
+        _used_jobs.add(payload.job_id)
+        try:
+            _persist_used_jobs()
+        except Exception as e:
+            _used_jobs.discard(payload.job_id)
+            print(f"[ERROR] could not persist used job {payload.job_id}: {e}")
+            raise HTTPException(status_code=503, detail="Could not record the payment. Try again.")
+
+    expires_at = now + _SESSION_TTL
+    token = _sign_token({"j": payload.job_id, "s": payload.scope, "e": expires_at})
+    return SessionResponse(session_token=token, expires_at=expires_at)
+
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 def startup_event():
+    _load_used_jobs()
     csnu_count    = _csnu.load()
     wallets_count = _wallets.load()
     print(f"CSNU loaded: {csnu_count} names.")
@@ -110,7 +240,7 @@ def startup_event():
 # ── CSNU endpoint ─────────────────────────────────────────────────────────────
 class CheckNamesRequest(BaseModel):
     raw_input: str
-    job_id: int
+    session_token: str
 
 class NameResult(BaseModel):
     name: str
@@ -123,8 +253,8 @@ class CheckNamesResponse(BaseModel):
 @app.post("/api/check-names", response_model=CheckNamesResponse)
 @app.post("/check-names",     response_model=CheckNamesResponse)
 def check_names(payload: CheckNamesRequest, request: Request):
-    _check_rate_limit(request.client.host if request.client else "unknown")
-    _verify_job_paid(payload.job_id)
+    _check_rate_limit(_client_ip(request))
+    _require_session(payload.session_token, "csnu")
     if not payload.raw_input.strip():
         raise HTTPException(status_code=400, detail="Nenhum nome fornecido.")
 
@@ -148,7 +278,7 @@ def check_names(payload: CheckNamesRequest, request: Request):
 # ── Wallet Sanctions endpoint ─────────────────────────────────────────────────
 class CheckWalletsRequest(BaseModel):
     wallets: List[str]
-    job_id: int
+    session_token: str
 
 class WalletResult(BaseModel):
     address: str
@@ -166,8 +296,8 @@ class CheckWalletsResponse(BaseModel):
 @app.post("/api/check-wallets", response_model=CheckWalletsResponse)
 @app.post("/check-wallets",     response_model=CheckWalletsResponse)
 def check_wallets(payload: CheckWalletsRequest, request: Request):
-    _check_rate_limit(request.client.host if request.client else "unknown")
-    _verify_job_paid(payload.job_id)
+    _check_rate_limit(_client_ip(request))
+    _require_session(payload.session_token, "wallets")
     if not payload.wallets:
         raise HTTPException(status_code=400, detail="Nenhuma carteira fornecida.")
     if _wallets.count == 0:
@@ -197,7 +327,8 @@ class CompleteJobRequest(BaseModel):
 
 @app.post("/api/complete-job")
 @app.post("/complete-job")
-def complete_job(payload: CompleteJobRequest):
+def complete_job(payload: CompleteJobRequest, request: Request):
+    _check_rate_limit(_client_ip(request))
     """Called by frontend after fund(). Backend calls submit() + complete() as treasury."""
     private_key_raw = os.environ.get("TREASURY_PRIVATE_KEY", "")
     if not private_key_raw:

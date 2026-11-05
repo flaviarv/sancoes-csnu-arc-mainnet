@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, useSwitchChain, useChainId } from 'wagmi'
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, useSwitchChain, useChainId, useSignMessage } from 'wagmi'
 import { erc20Abi, parseEventLogs, type Address } from 'viem'
 import { arc } from 'viem/chains'
 import { Wallet, Coins, Loader2, CheckCircle2, ExternalLink } from 'lucide-react'
@@ -54,13 +54,21 @@ const acAbi = [
 
 type Step = 'idle' | 'creating' | 'approving' | 'funding' | 'submitting' | 'done' | 'error'
 
+export interface PaidSession {
+  token: string      // signed session token issued by the backend after verifying payment
+  expiresAt: number  // unix seconds
+}
+
 interface Props {
-  onPaid: (jobId: number) => void  // jobId passed for backend onchain verification
+  scope: 'csnu' | 'wallets'  // product this payment unlocks
+  onPaid: (session: PaidSession) => void
   serviceLabel?: string
 }
 
-export default function PaymentGate({ onPaid, serviceLabel = 'search' }: Props) {
+export default function PaymentGate({ scope, onPaid, serviceLabel = 'search' }: Props) {
   const { address, isConnected } = useAccount()
+  const { signMessageAsync } = useSignMessage()
+  const sessionRef = useRef<PaidSession | null>(null)
   const chainId = useChainId()
   const { switchChainAsync } = useSwitchChain()
   const [step, setStep] = useState<Step>('idle')
@@ -86,13 +94,14 @@ export default function PaymentGate({ onPaid, serviceLabel = 'search' }: Props) 
 
   const calledRef = useRef(false)
   useEffect(() => {
-    if (receipt && step === 'submitting' && !calledRef.current) {
+    if (receipt && step === 'submitting' && !calledRef.current && sessionRef.current) {
       calledRef.current = true
+      const session = sessionRef.current
       // use a microtask to move setState out of the synchronous effect body
       void Promise.resolve().then(() => {
         setStep('done')
         toast.success('Payment confirmed — search unlocked!')
-        onPaid(jobId ? Number(jobId) : 0)
+        onPaid(session)
       })
     }
   }, [receipt, step, onPaid])
@@ -184,11 +193,37 @@ export default function PaymentGate({ onPaid, serviceLabel = 'search' }: Props) 
 
       // Step 5: backend calls submit() + complete() as treasury (provider + evaluator)
       setStep('submitting')
-      await fetch('/api/complete-job', {
+      const completeRes = await fetch('/api/complete-job', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job_id: Number(newJobId) }),
       })
+      if (!completeRes.ok) {
+        const err = await completeRes.json().catch(() => ({})) as { detail?: string }
+        throw new Error(err.detail ?? `Could not finalize payment (HTTP ${completeRes.status})`)
+      }
+
+      // Step 6: the paying wallet signs a message; the backend verifies the signer is the
+      // job's client and issues a single-use session. This message must match the backend.
+      const issuedAt = Math.floor(Date.now() / 1000)
+      const message =
+        'criptokyc.tech - acesso a consulta\n' +
+        `Produto: ${scope}\n` +
+        `Job: ${newJobId.toString()}\n` +
+        'Rede: Arc Mainnet (5042)\n' +
+        `Emitido em: ${issuedAt}`
+      const signature = await signMessageAsync({ message })
+      const sessionRes = await fetch('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: Number(newJobId), scope, issued_at: issuedAt, signature }),
+      })
+      if (!sessionRes.ok) {
+        const err = await sessionRes.json().catch(() => ({})) as { detail?: string }
+        throw new Error(err.detail ?? `Could not unlock search (HTTP ${sessionRes.status})`)
+      }
+      const sessionData = await sessionRes.json() as { session_token: string; expires_at: number }
+      sessionRef.current = { token: sessionData.session_token, expiresAt: sessionData.expires_at }
 
       setTxHash(fundHash)
     } catch (e) {
