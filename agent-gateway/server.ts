@@ -43,6 +43,12 @@ type PaidRequest = Request & {
 }
 
 const app = express()
+
+// Atrás de um proxy reverso (Caddy), o IP real do visitante vem em X-Forwarded-For.
+// TRUST_PROXY = número de proxies confiáveis na frente (0 = desligado, o padrão seguro:
+// com o servidor exposto direto, um cliente poderia forjar o cabeçalho).
+const TRUST_PROXY = Number(process.env.TRUST_PROXY ?? 0)
+if (Number.isInteger(TRUST_PROXY) && TRUST_PROXY > 0) app.set('trust proxy', TRUST_PROXY)
 app.disable('x-powered-by')
 app.use(express.json({ limit: '50kb' }))
 

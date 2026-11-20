@@ -1,0 +1,46 @@
+# Gateway x402 para agentes de IA (testnet). Separado do site: não altera o docker-compose.yml.
+#
+#   docker compose -f docker-compose.agents.yml up -d --build
+#
+# Variáveis (arquivo .env.agents na raiz, ou exportadas no shell):
+#   SELLER_ADDRESS  endereço EVM que RECEBE os pagamentos (público; nunca uma chave privada)
+#   GATEWAY_PORT    porta no host, só em 127.0.0.1 (padrão 3100); o Caddy faz o HTTPS na frente
+services:
+  agent-internal:
+    build:
+      context: .
+      dockerfile: agent-gateway/Dockerfile.internal
+    image: criptokyc-agent-internal
+    container_name: criptokyc-agent-internal
+    restart: unless-stopped
+    # Sem "ports": acessível só pela rede interna do compose, nunca pelo host ou pela internet.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3101/internal/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  agent-gateway:
+    build:
+      context: .
+      dockerfile: agent-gateway/Dockerfile.gateway
+    image: criptokyc-agent-gateway
+    container_name: criptokyc-agent-gateway
+    restart: unless-stopped
+    depends_on:
+      agent-internal:
+        condition: service_healthy
+    environment:
+      X402_NETWORK: testnet           # esta versão recusa iniciar fora da testnet
+      SELLER_ADDRESS: ${SELLER_ADDRESS:?defina SELLER_ADDRESS (endereço que recebe os pagamentos)}
+      INTERNAL_API_URL: http://agent-internal:3101
+      TRUST_PROXY: "1"                # há um proxy (Caddy) na frente; usa o IP real no limite de requisições
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-3100}:3100"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3100/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

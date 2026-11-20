@@ -1,0 +1,21 @@
+# API interna de consulta (FastAPI + pipeline/). NÃO é publicada: só o gateway a acessa.
+# Contexto de build: raiz do repositório.
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY pipeline/ ./pipeline/
+COPY data/ ./data/
+COPY agent-gateway/internal_api.py ./agent-gateway/internal_api.py
+
+# Usuário sem privilégios
+RUN useradd --system --no-create-home app && chown -R app /app
+USER app
+
+WORKDIR /app/agent-gateway
+EXPOSE 3101
+
+CMD ["python", "-m", "uvicorn", "internal_api:app", "--host", "0.0.0.0", "--port", "3101"]

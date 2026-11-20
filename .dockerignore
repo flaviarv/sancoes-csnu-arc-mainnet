@@ -9,3 +9,7 @@ sancoes-csnu-arc/.git/
 .git/
 *.log
 state/
+**/node_modules
+**/.env
+**/.env.*
+**/__pycache__

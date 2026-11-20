@@ -1,0 +1,21 @@
+# Proxy x402 (Express + Circle Gateway Nanopayments). Contexto de build: raiz do repositório.
+FROM oven/bun:1
+
+WORKDIR /app
+
+# Dependências primeiro (cache de camada)
+COPY agent-gateway/package.json agent-gateway/bun.lock ./
+RUN bun install --frozen-lockfile --production
+
+# Só o código necessário (nunca copia .env*, scripts de teste nem node_modules do host)
+COPY agent-gateway/server.ts agent-gateway/pricing.ts agent-gateway/tsconfig.json ./
+
+ENV NODE_ENV=production \
+    PORT=3100
+
+EXPOSE 3100
+
+# Roda sem privilégios de root
+USER bun
+
+CMD ["bun", "run", "server.ts"]
