@@ -130,6 +130,57 @@ app.get('/v1/pricing', (_req, res) => {
   })
 })
 
+// OpenAPI público: permite que qualquer agente ou IA (com ou sem MCP) descubra e chame a API.
+// Chamadas sem pagamento recebem 402 com as condições (x402); quem não paga x402 não obtém dados.
+app.get('/openapi.json', (_req, res) => {
+  const listBody = (field: string, example: string[]) => ({
+    required: true,
+    content: {
+      'application/json': {
+        schema: {
+          type: 'object',
+          required: [field],
+          properties: { [field]: { type: 'array', minItems: 1, maxItems: MAX_ITEMS_PER_CALL, items: { type: 'string', maxLength: MAX_ITEM_LENGTH } } },
+        },
+        example: { [field]: example },
+      },
+    },
+  })
+  const responses = {
+    '200': { description: 'Screening result (payment settled).' },
+    '400': { description: 'Invalid body. No payment is charged.' },
+    '402': { description: 'Payment required (x402). Pay with a Circle Gateway Nanopayments authorization and retry with the Payment-Signature header; conditions are in the PAYMENT-REQUIRED header.' },
+    '503': { description: 'Upstream unavailable. No payment is charged.' },
+  }
+  res.json({
+    openapi: '3.1.0',
+    info: {
+      title: 'criptokyc.tech sanctions screening (x402)',
+      version: '0.1.0',
+      description: `Pay-per-call sanctions screening for AI agents. Network mode: ${MODE}. Payment: x402 via Circle Gateway Nanopayments (USDC, gas-free for the buyer).`,
+    },
+    paths: {
+      '/v1/csnu/check': {
+        post: {
+          operationId: 'checkCsnuNames',
+          summary: `Check names against the UN Security Council (CSNU) list. Price ${PRICES.csnu} per call.`,
+          requestBody: listBody('names', ['Noor Wali Mehsud']),
+          responses,
+        },
+      },
+      '/v1/wallets/check': {
+        post: {
+          operationId: 'checkWalletSanctions',
+          summary: `Check crypto wallet addresses against OFAC, Israel NBCTF, UK OFSI, EU, UN and SECO. Price ${PRICES.wallets} per call.`,
+          requestBody: listBody('wallets', ['TWBAPzpPiZarfVsY2BLXeaLhNHurn4wkWG']),
+          responses,
+        },
+      },
+      '/v1/pricing': { get: { operationId: 'getPricing', summary: 'Current prices (free).', responses: { '200': { description: 'Prices.' } } } },
+    },
+  })
+})
+
 // ── Rotas pagas ──────────────────────────────────────────────────────────────
 app.post('/v1/csnu/check', rateLimit, validList('names'), ensureUpstream, gateway.require(PRICES.csnu),
   (req: PaidRequest, res) => { void forward('/internal/check-names', { names: req.body.names }, req, res) })

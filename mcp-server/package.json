@@ -1,0 +1,26 @@
+{
+  "name": "criptokyc-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server: sanctions screening (CSNU names + wallet addresses) paid per call in USDC via x402 (Circle Gateway Nanopayments).",
+  "bin": {
+    "criptokyc-mcp": "./index.ts"
+  },
+  "scripts": {
+    "start": "bun run index.ts",
+    "typecheck": "tsc --noEmit",
+    "deposit": "bun run deposit.ts",
+    "test:client": "bun run test-client.ts"
+  },
+  "dependencies": {
+    "@circle-fin/x402-batching": "^4.0.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "viem": "^2.58.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
