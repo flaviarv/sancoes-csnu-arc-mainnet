@@ -35,10 +35,10 @@ export class Budget {
   /** Retorna o motivo da recusa, ou null se o pagamento é permitido. */
   refusalReason(price: bigint): string | null {
     if (price > this.maxPerCall) {
-      return `teto por chamada excedido: a consulta custa ${fmt(price)} USDC e o teto é ${fmt(this.maxPerCall)} USDC`
+      return `per-call spending cap exceeded: this screening costs ${fmt(price)} USDC and the cap is ${fmt(this.maxPerCall)} USDC (CRIPTOKYC_MAX_PRICE_PER_CALL)`
     }
     if (this.spent + price > this.maxPerSession) {
-      return `teto da sessão excedido: já gastou ${fmt(this.spent)} USDC de ${fmt(this.maxPerSession)} USDC`
+      return `session spending cap exceeded: already spent ${fmt(this.spent)} of ${fmt(this.maxPerSession)} USDC (CRIPTOKYC_MAX_SPEND_PER_SESSION). Restart the AI app to start a new session.`
     }
     return null
   }

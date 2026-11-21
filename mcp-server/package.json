@@ -1,16 +1,15 @@
 {
   "name": "criptokyc-mcp",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
-  "description": "MCP server: sanctions screening (CSNU names + wallet addresses) paid per call in USDC via x402 (Circle Gateway Nanopayments).",
+  "description": "MCP server for AI apps (Claude, Cursor and more): sanctions screening of names (UN Security Council) and crypto wallets (OFAC, EU, UK, UN, SECO, Israel), paid per call in USDC via x402. Testnet.",
   "bin": {
-    "criptokyc-mcp": "./index.ts"
+    "criptokyc-mcp": "dist/cli.js"
   },
   "scripts": {
-    "start": "bun run index.ts",
+    "build": "bun build cli.ts --target=node --packages=external --outfile=dist/cli.js && chmod +x dist/cli.js",
+    "prepublishOnly": "bun run build && bun run typecheck",
     "typecheck": "tsc --noEmit",
-    "deposit": "bun run deposit.ts",
     "test:client": "bun run test-client.ts"
   },
   "dependencies": {
@@ -22,5 +21,23 @@
   "devDependencies": {
     "@types/node": "^26.6.6",
     "typescript": "^7.0.2"
-  }
+  },
+  "license": "UNLICENSED",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "x402",
+    "usdc",
+    "sanctions",
+    "compliance",
+    "arc",
+    "circle"
+  ]
 }
