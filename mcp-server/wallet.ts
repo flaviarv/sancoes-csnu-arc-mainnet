@@ -6,7 +6,7 @@
  * O arquivo é gravado com permissão 600 (pasta 700). No Windows essas permissões não se aplicam;
  * a proteção é a pasta do próprio usuário.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -38,6 +38,12 @@ export function ensureWallet(): LoadedWallet {
 
   const file = walletFile()
   if (existsSync(file)) {
+    try {
+      chmodSync(file, 0o600)
+      chmodSync(walletDir(), 0o700)
+    } catch {
+      // Windows ou sem permissão: segue (a proteção é a pasta do usuário)
+    }
     const key = parseKey((JSON.parse(readFileSync(file, 'utf8')) as { privateKey?: unknown }).privateKey, file)
     return { key, address: privateKeyToAccount(key).address, source: 'file', created: false }
   }

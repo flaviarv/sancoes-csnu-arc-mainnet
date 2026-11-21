@@ -5,19 +5,22 @@
  * Se o arquivo de configuração existir mas for inválido, NÃO o sobrescreve.
  */
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { PACKAGE_NAME, SERVER_NAME } from './config.ts'
+import { PACKAGE_NAME, SERVER_NAME, packageVersion } from './config.ts'
 
 export type ClientId = 'claude-desktop' | 'cursor' | 'claude-code'
 export const ALL_CLIENTS: ClientId[] = ['claude-desktop', 'cursor', 'claude-code']
 
 const isWin = () => process.platform === 'win32'
 
+/** Pacote com a versão FIXADA: uma atualização maliciosa no npm não roda sozinha na carteira do usuário. */
+const pinned = (): string => `${PACKAGE_NAME}@${packageVersion()}`
+
 /** Entrada MCP padrão. No Windows, "npx" precisa passar pelo cmd. */
 export function mcpEntry(): { command: string; args: string[] } {
-  const args = ['-y', PACKAGE_NAME]
+  const args = ['-y', pinned()]
   return isWin() ? { command: 'cmd', args: ['/c', 'npx', ...args] } : { command: 'npx', args }
 }
 
@@ -56,12 +59,18 @@ export interface InstallResult {
 export function installInto(id: ClientId): InstallResult {
   if (id === 'claude-code') {
     if (!hasClaudeCli()) {
-      return { client: id, status: 'skipped', detail: `Claude Code CLI not found. Run: claude mcp add -s user ${SERVER_NAME} -- npx -y ${PACKAGE_NAME}` }
+      return { client: id, status: 'skipped', detail: `Claude Code CLI not found. Run: claude mcp add -s user ${SERVER_NAME} -- npx -y ${pinned()}` }
     }
-    const r = spawnSync('claude', ['mcp', 'add', '-s', 'user', SERVER_NAME, '--', 'npx', '-y', PACKAGE_NAME], { encoding: 'utf8', shell: isWin() })
-    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split('\n')[0] ?? ''
-    if (r.status === 0) return { client: id, status: 'installed', detail: 'registered with "claude mcp add"' }
-    if (/already exists/i.test(out)) return { client: id, status: 'already', detail: 'already registered' }
+    const add = () => spawnSync('claude', ['mcp', 'add', '-s', 'user', SERVER_NAME, '--', 'npx', '-y', pinned()], { encoding: 'utf8', shell: isWin() })
+    let r = add()
+    let out = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split('\n')[0] ?? ''
+    if (r.status !== 0 && /already exists/i.test(out)) {
+      // já registrado: atualiza para a versão fixada atual
+      spawnSync('claude', ['mcp', 'remove', '-s', 'user', SERVER_NAME], { stdio: 'ignore', shell: isWin() })
+      r = add()
+      out = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split('\n')[0] ?? ''
+    }
+    if (r.status === 0) return { client: id, status: 'installed', detail: `registered with "claude mcp add" (${pinned()})` }
     return { client: id, status: 'failed', detail: out || 'claude mcp add failed' }
   }
 
@@ -73,13 +82,22 @@ export function installInto(id: ClientId): InstallResult {
     } catch {
       return { client: id, status: 'failed', detail: `${file} is not valid JSON; left untouched. Fix it or add the entry by hand.` }
     }
-    copyFileSync(file, `${file}.criptokyc.bak`)
   } else {
     mkdirSync(dirname(file), { recursive: true })
   }
   const servers = (config.mcpServers ??= {})
-  if (servers[SERVER_NAME]) return { client: id, status: 'already', detail: file }
-  servers[SERVER_NAME] = mcpEntry()
-  writeFileSync(file, JSON.stringify(config, null, 2) + '\n')
+  const entry = mcpEntry()
+  if (JSON.stringify(servers[SERVER_NAME]) === JSON.stringify(entry)) return { client: id, status: 'already', detail: file }
+
+  // Backup só quando vamos modificar, e NUNCA sobrescreve um backup existente (o original é preservado).
+  if (existsSync(file)) {
+    const bak = `${file}.criptokyc.bak`
+    copyFileSync(file, existsSync(bak) ? `${bak}.${Date.now()}` : bak, constants.COPYFILE_EXCL)
+  }
+  servers[SERVER_NAME] = entry
+  // Escrita atômica: um erro no meio nunca deixa a configuração do cliente corrompida.
+  const tmp = `${file}.criptokyc.tmp`
+  writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n')
+  renameSync(tmp, file)
   return { client: id, status: 'installed', detail: file }
 }

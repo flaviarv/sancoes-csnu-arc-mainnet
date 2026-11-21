@@ -43,3 +43,14 @@ Reinicie o Claude ou o Cursor e pergunte por "Noor Wali Mehsud".
   Claude Desktop, Cursor ou Claude Code de verdade. Teste em cada um antes de divulgar.
 - **Windows:** o instalador usa `cmd /c npx` por precaução; confirme num Windows real.
 - **Mainnet:** continua desabilitada de propósito.
+
+## Segurança da publicação (leia antes do `npm publish`)
+
+- **Ative a verificação em duas etapas (2FA) na conta npm** e use um token de publicação restrito. Quem controla
+  essa conta controla o código que roda ao lado da carteira de cada usuário.
+- **O `install` fixa a versão** na configuração do cliente (`criptokyc-mcp@x.y.z`): uma versão nova no npm
+  nunca roda sozinha na máquina de quem já instalou. Para atualizar, o usuário roda
+  `npx -y criptokyc-mcp@latest install`, que troca a versão fixada e mantém o backup original da configuração.
+- **O pacote só paga para o endereço da treasury** (`EXPECTED_PAY_TO` em `config.ts`). Se você trocar a carteira
+  treasury (por exemplo, ao rotacionar a chave), **publique uma versão nova com o endereço novo**, e os usuários
+  precisam atualizar. Versões antigas recusam pagar o endereço novo, de propósito.

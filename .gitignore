@@ -13,3 +13,10 @@ recovery_file*.dat
 *secret*
 # Runtime state (pagamentos já usados)
 state/
+
+# Dependências e builds (nunca versionar)
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+state/

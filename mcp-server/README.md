@@ -66,3 +66,12 @@ On Windows some apps need `"command": "cmd", "args": ["/c", "npx", "-y", "cripto
 
 `CRIPTOKYC_API_URL` (service URL), `CRIPTOKYC_MAX_PRICE_PER_CALL`, `CRIPTOKYC_MAX_SPEND_PER_SESSION`,
 `CRIPTOKYC_HOME` (wallet folder), `CRIPTOKYC_BUYER_PRIVATE_KEY` (use your own key instead of the generated wallet).
+
+## Security notes
+
+- Your wallet key lives only in `~/.criptokyc/wallet.json` (mode 600), never in your AI app's config file.
+- The installed config **pins this package's version**, so a new release never runs on your machine by itself.
+  Update on purpose with `npx -y criptokyc-mcp@latest install`.
+- The server **refuses to pay any address other than criptokyc.tech's**, and enforces spending caps
+  (0.05 USDC per call, 0.50 USDC per session by default).
+- Use a dedicated wallet and keep a small balance in it.

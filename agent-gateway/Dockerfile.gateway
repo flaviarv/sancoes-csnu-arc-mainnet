@@ -1,5 +1,5 @@
 # Proxy x402 (Express + Circle Gateway Nanopayments). Contexto de build: raiz do repositório.
-FROM oven/bun:1
+FROM oven/bun:1.3
 
 WORKDIR /app
 

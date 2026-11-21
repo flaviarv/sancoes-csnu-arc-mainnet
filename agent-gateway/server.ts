@@ -31,6 +31,7 @@ if (!/^0x[a-fA-F0-9]{40}$/.test(SELLER_ADDRESS)) {
 
 const PORT = Number(process.env.PORT ?? 3100)
 const INTERNAL_API = process.env.INTERNAL_API_URL ?? 'http://127.0.0.1:3101'
+const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN ?? ''
 const TESTNET_FACILITATOR = 'https://gateway-api-testnet.circle.com'
 
 const gateway = createGatewayMiddleware({
@@ -52,13 +53,41 @@ if (Number.isInteger(TRUST_PROXY) && TRUST_PROXY > 0) app.set('trust proxy', TRU
 app.disable('x-powered-by')
 app.use(express.json({ limit: '50kb' }))
 
+// ── Cabeçalhos de segurança: respostas nunca ficam em cache (consultas de sanções são sensíveis) ──
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.set('Cache-Control', 'no-store')
+  res.set('X-Content-Type-Options', 'nosniff')
+  res.set('Referrer-Policy', 'no-referrer')
+  next()
+})
+
 // ── Limite simples de requisições por IP (protege o proxy e o facilitator) ───
+// A memória é limitada: entradas vencidas são removidas a cada minuto e o mapa tem teto,
+// para um atacante com muitos IPs não conseguir esgotar a RAM do servidor.
+const RATE_LIMIT_PER_MIN = 120
+const MAX_TRACKED_IPS = 50_000
 const hits = new Map<string, number[]>()
+function pruneHits(now: number) {
+  for (const [ip, ts] of hits) {
+    const recent = ts.filter((t) => now - t < 60_000)
+    if (recent.length === 0) hits.delete(ip)
+    else hits.set(ip, recent)
+  }
+}
+setInterval(() => pruneHits(Date.now()), 60_000).unref()
+
 function rateLimit(req: Request, res: Response, next: NextFunction) {
   const ip = req.ip ?? 'unknown'
   const now = Date.now()
+  if (!hits.has(ip) && hits.size >= MAX_TRACKED_IPS) {
+    pruneHits(now)
+    if (hits.size >= MAX_TRACKED_IPS) {
+      res.status(429).json({ error: 'rate_limited', message: 'Server busy. Try again in a minute.' })
+      return
+    }
+  }
   const recent = (hits.get(ip) ?? []).filter((t) => now - t < 60_000)
-  if (recent.length >= 120) {
+  if (recent.length >= RATE_LIMIT_PER_MIN) {
     res.status(429).json({ error: 'rate_limited', message: 'Too many requests. Try again in a minute.' })
     return
   }
@@ -108,7 +137,7 @@ async function forward(path: string, body: unknown, req: PaidRequest, res: Respo
   try {
     const r = await fetch(`${INTERNAL_API}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(INTERNAL_TOKEN ? { 'X-Internal-Token': INTERNAL_TOKEN } : {}) },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(15_000),
     })

@@ -24,11 +24,19 @@ git pull origin main
 nano .env.agents
 ```
 
-Conteúdo do `.env.agents` (uma linha; o endereço é público, **nunca coloque chave privada aqui**):
+Conteúdo do `.env.agents` (duas linhas). O endereço é público; **nunca coloque chave privada aqui**:
 
 ```
 SELLER_ADDRESS=0xd2f80f6cf27483392f70f21b3381109f9c33c390
+INTERNAL_TOKEN=cole_aqui_o_resultado_de_openssl_rand_-hex_32
 ```
+
+Gere o `INTERNAL_TOKEN` no servidor com `openssl rand -hex 32` e cole o resultado. Ele é um segredo
+compartilhado entre o proxy e a API interna: mesmo que alguém publique a porta da API interna por engano,
+sem o token ninguém lê os dados sem pagar. O compose se recusa a subir sem ele.
+
+Os containers rodam endurecidos: sem root, sistema de arquivos somente leitura, sem nenhuma capability do
+Linux e com limite de processos.
 
 Esse arquivo é separado do `.env` do site de propósito. O `.gitignore` já ignora `.env.*`.
 

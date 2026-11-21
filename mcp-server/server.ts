@@ -13,7 +13,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { GatewayClient } from '@circle-fin/x402-batching/client'
 import { z } from 'zod'
 import { Budget, fmt } from './budget.ts'
-import { CHAIN, FAUCET_URL, PACKAGE_NAME, apiUrl } from './config.ts'
+import { CHAIN, FAUCET_URL, PACKAGE_NAME, apiUrl, expectedPayTo } from './config.ts'
 import { ensureWallet } from './wallet.ts'
 
 const log = (...a: unknown[]) => console.error('[criptokyc-mcp]', ...a)
@@ -46,7 +46,12 @@ try {
 }
 
 const client = new GatewayClient({ chain: CHAIN, privateKey: KEY })
+const PAY_TO = expectedPayTo()
 client.onBeforePaymentCreation(async ({ selectedRequirements }) => {
+  // Nunca paga um destino diferente do esperado (protege contra serviço falso ou domínio sequestrado).
+  if (selectedRequirements.payTo.toLowerCase() !== PAY_TO) {
+    return { abort: true as const, reason: 'payment destination does not match the expected criptokyc.tech address; refusing to pay (possible spoofed service)' }
+  }
   const reason = budget.refusalReason(BigInt(selectedRequirements.amount))
   if (reason) return { abort: true as const, reason }
 })
