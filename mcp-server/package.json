@@ -7,8 +7,8 @@
     "criptokyc-mcp": "dist/cli.js"
   },
   "scripts": {
-    "build": "bun build cli.ts --target=node --packages=external --outfile=dist/cli.js && chmod +x dist/cli.js",
-    "prepublishOnly": "bun run build && bun run typecheck",
+    "build": "node build.mjs",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
     "test:client": "bun run test-client.ts"
   },
@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
   },
   "license": "UNLICENSED",

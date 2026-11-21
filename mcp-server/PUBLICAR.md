@@ -6,21 +6,25 @@ faltam duas ações que dependem das suas contas.
 ## 1. Colocar o gateway no ar com URL pública
 
 O pacote usa por padrão `https://agents.criptokyc.tech` (em `config.ts`). Siga `../agent-gateway/DEPLOY.md`:
-registro DNS A, `docker compose -f docker-compose.agents.yml up -d --build`, Caddy com HTTPS.
+registro DNS A, `docker compose -f docker-compose.agents.yml up -d --build` e HTTPS (Nginx + Certbot, ou Caddy).
 
 Confirme: `curl https://agents.criptokyc.tech/health` deve responder `{"status":"ok","mode":"testnet"}`.
 
-Se preferir outro endereço, mude `DEFAULT_API_URL` em `config.ts` e rode `bun run build` de novo.
+Se preferir outro endereço, mude `DEFAULT_API_URL` em `config.ts` e rode `npm run build` de novo.
 
 ## 2. Publicar no npm
 
-```bash
+Precisa só de **Node 18 ou superior e npm**. Não precisa de Bun e funciona no Windows, Mac e Linux.
+
+```powershell
 cd mcp-server
-bun install
-bun run build
-npm login            # sua conta npm (use 2FA)
-npm publish          # o nome criptokyc-mcp estava livre no npm em 21/11/2026
+npm install          # instala as ferramentas de build (esbuild, typescript)
+npm login            # sua conta npm (ative o 2FA)
+npm publish          # o build roda sozinho antes de publicar
 ```
+
+O nome `criptokyc-mcp` estava livre no npm em 21/11/2026. Se o `npm install` mostrar um aviso sobre
+"install-scripts" do esbuild, pode ignorar: o build funciona do mesmo jeito.
 
 - O campo `license` está como `UNLICENSED`. Troque pela licença que você quiser antes de publicar.
 - O pacote publicado contém só `dist/cli.js`, `README.md` e `package.json` (nenhum código-fonte, teste ou chave).
